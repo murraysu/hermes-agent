@@ -1,0 +1,13 @@
+web/
+ui-tui/
+website/
+ssl/
+backups/
+certbot/
+.git/
+node_modules/
+__pycache__/
+*.pyc
+dist/
+build/
+.playwright/

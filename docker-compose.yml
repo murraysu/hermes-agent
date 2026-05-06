@@ -1,52 +1,123 @@
-#
-# docker-compose.yml for Hermes Agent
-#
-# Usage:
-#   HERMES_UID=$(id -u) HERMES_GID=$(id -g) docker compose up -d
-#
-# Set HERMES_UID / HERMES_GID to the host user that owns ~/.hermes so
-# files created inside the container stay readable/writable on the host.
-# The entrypoint remaps the internal `hermes` user to these values via
-# usermod/groupmod + gosu.
-#
-# Security notes:
-#   - The dashboard service binds to 127.0.0.1 by default. It stores API
-#     keys; exposing it on LAN without auth is unsafe. If you want remote
-#     access, use an SSH tunnel or put it behind a reverse proxy that
-#     adds authentication — do NOT pass --insecure --host 0.0.0.0.
-#   - The gateway's API server is off unless you uncomment API_SERVER_KEY
-#     and API_SERVER_HOST. See docs/user-guide/api-server.md before doing
-#     this on an internet-facing host.
-#
-services:
-  gateway:
-    build: .
-    image: hermes-agent
-    container_name: hermes
-    restart: unless-stopped
-    network_mode: host
-    volumes:
-      - ~/.hermes:/opt/data
-    environment:
-      - HERMES_UID=${HERMES_UID:-10000}
-      - HERMES_GID=${HERMES_GID:-10000}
-      # To expose the OpenAI-compatible API server beyond localhost,
-      # uncomment BOTH lines (API_SERVER_KEY is mandatory for auth):
-      # - API_SERVER_HOST=0.0.0.0
-      # - API_SERVER_KEY=${API_SERVER_KEY}
-    command: ["gateway", "run"]
+# SM121 System — Full AI Agent Stack
+# Services: LiteLLM (LLM Proxy) + CLI-Anything (CLI Manager) + Hermes-Agent (AI Agent Hub)
 
-  dashboard:
-    image: hermes-agent
-    container_name: hermes-dashboard
-    restart: unless-stopped
-    network_mode: host
-    depends_on:
-      - gateway
-    volumes:
-      - ~/.hermes:/opt/data
+services:
+  # ====================
+  # LiteLLM — LLM Proxy Server (self-built for ARM64)
+  # ====================
+  litellm:
+    image: litellm-sm121:latest
+    container_name: litellm-sm121
+    ports:
+      - "4000:4000"
     environment:
-      - HERMES_UID=${HERMES_UID:-10000}
-      - HERMES_GID=${HERMES_GID:-10000}
-    # Localhost-only. For remote access, tunnel via `ssh -L 9119:localhost:9119`.
-    command: ["dashboard", "--host", "127.0.0.1", "--no-open"]
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+      - REDIS_HOST=hermes-redis
+      - REDIS_PORT=6379
+    volumes:
+      - litellm-data:/app
+      - /home/murray/litellm/config.yaml:/app/config.yaml:ro
+    command: ["litellm", "--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ====================
+  # CLI-Anything — CLI Package Manager
+  # ====================
+  cli-anything:
+    image: cli-anything-sm121:latest
+    container_name: cli-anything-sm121
+    volumes:
+      - cli-anything-data:/app
+    environment:
+      - PYTHONPATH=/app
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+
+  # ====================
+  # Hermes-Agent — AI Agent Hub with Agency-Agents
+  # ====================
+  hermes-agent:
+    image: hermes-agent-hermes-agent:latest
+    container_name: hermes-agent-sm121
+    ports:
+      - "3001:9119"  # Web dashboard
+      - "8001:8642"  # API gateway (api_server platform, default port 8642)
+    environment:
+      - HERMES_HOME=/opt/data
+      - HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
+      - PYTHONUNBUFFERED=1
+      # API Keys
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    volumes:
+      # Persist Hermes data (sessions, logs, skills, configs)
+      - hermes-data:/opt/data
+      # Mount Agency-Agents into Hermes
+      - /home/murray/agency-agents:/opt/data/agency-agents:ro
+      # Mount Enterprise Skills into Hermes
+      - /home/murray/enterprise-skills:/opt/data/skills/enterprise:ro
+      # Mount converted Agency skills into Hermes
+      - /home/murray/enterprise-skills/agency:/opt/data/skills/agency:ro
+      # Docker socket for sandbox environments
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: ["/bin/sh", "-c", "/opt/hermes/.venv/bin/hermes gateway run --accept-hooks & /opt/hermes/.venv/bin/hermes dashboard --host 0.0.0.0 --insecure --no-open"]
+    restart: unless-stopped
+
+  # ====================
+  # Redis — Cache for LiteLLM
+  # ====================
+  redis:
+    image: redis:8.2
+    container_name: hermes-redis
+    command: redis-server --port 6379
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ====================
+  # Nginx — Reverse Proxy (optional)
+  # ====================
+  nginx:
+    image: nginx:alpine
+    container_name: hermes-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - ./certbot/www:/var/www/certbot:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+    depends_on:
+      - hermes-agent
+      - litellm
+    restart: unless-stopped
+
+volumes:
+  litellm-data:
+  cli-anything-data:
+  hermes-data:
+  redis-data:

@@ -86,7 +86,7 @@ services:
   # Redis — Cache for LiteLLM
   # ====================
   redis:
-    image: redis:8.2
+    image: redis:8.6.3
     container_name: hermes-redis
     command: redis-server --port 6379
     ports:

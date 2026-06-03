@@ -35,3 +35,10 @@ data/
 # Compose/profile runtime state (bind-mounted; avoid ownership/secret issues)
 hermes-config/
 runtime/
+
+# Local deployment (SM121) — bind-mounted at runtime, root-owned, must not enter build context
+certbot/
+ssl/
+backups/
+.gitnexus
+.claude/

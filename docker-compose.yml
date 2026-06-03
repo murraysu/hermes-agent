@@ -52,6 +52,7 @@ services:
   # Hermes-Agent — AI Agent Hub with Agency-Agents
   # ====================
   hermes-agent:
+    build: .
     image: hermes-agent-hermes-agent:latest
     container_name: hermes-agent-sm121
     ports:
@@ -64,6 +65,10 @@ services:
       - HERMES_DASHBOARD=1
       - HERMES_DASHBOARD_HOST=0.0.0.0
       - HERMES_DASHBOARD_PORT=9119
+      # Upstream v2026.5.x now requires explicit opt-in to bind the dashboard
+      # to a non-loopback host without an auth provider (OAuth gate). We sit
+      # behind nginx + Cloudflare, so restore the pre-upgrade behaviour.
+      - HERMES_DASHBOARD_INSECURE=1
       # API Keys
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}

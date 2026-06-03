@@ -1,12 +1,48 @@
 from pathlib import Path
 from subprocess import CalledProcessError
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from hermes_cli import config as hermes_config
 from hermes_cli import main as hermes_main
 
+
+# ---------------------------------------------------------------------------
+# Managed-uv compatibility for tests that patch shutil.which
+# ---------------------------------------------------------------------------
+# The production code now uses ``ensure_uv()`` / ``update_managed_uv()``
+# instead of ``shutil.which("uv")``.  Many tests in this file patch
+# ``shutil.which`` to control whether uv is "available" — these autouse
+# fixtures make the managed_uv functions delegate to the patched
+# ``shutil.which`` so the existing test setup keeps working without
+# per-test changes.
+@pytest.fixture(autouse=True)
+def _patch_managed_uv(request):
+    """Make managed_uv helpers follow shutil.which mocking in tests."""
+    import shutil
+
+    # resolve_uv delegates to shutil.which("uv") so that test patches
+    # on shutil.which flow through naturally.
+    def _fake_resolve_uv():
+        return shutil.which("uv")
+
+    def _fake_ensure_uv():
+        path = shutil.which("uv")
+        return (path, False)  # never freshly bootstrapped in tests
+
+    def _fake_update_managed_uv():
+        return None  # never actually self-update in tests
+
+    def _fake_rebuild_venv(*args, **kwargs):
+        return True  # no-op in tests
+
+    with patch("hermes_cli.managed_uv.resolve_uv", side_effect=_fake_resolve_uv), \
+         patch("hermes_cli.managed_uv.ensure_uv", side_effect=_fake_ensure_uv), \
+         patch("hermes_cli.managed_uv.update_managed_uv", side_effect=_fake_update_managed_uv), \
+         patch("hermes_cli.managed_uv.rebuild_venv", side_effect=_fake_rebuild_venv):
+        yield
 
 def test_stash_local_changes_if_needed_returns_none_when_tree_clean(monkeypatch, tmp_path):
     calls = []
@@ -305,13 +341,15 @@ def _setup_update_mocks(monkeypatch, tmp_path):
     monkeypatch.setattr(hermes_config, "get_missing_config_fields", lambda: [])
     monkeypatch.setattr(hermes_config, "check_config_version", lambda: (5, 5))
     monkeypatch.setattr(hermes_config, "migrate_config", lambda **kw: {"env_added": [], "config_added": []})
+    monkeypatch.setattr(hermes_main, "_refresh_active_lazy_features", lambda: None)
 
 
 def test_cmd_update_retries_optional_extras_individually_when_all_fails(monkeypatch, tmp_path, capsys):
     """When .[all] fails, update should keep base deps and retry extras individually."""
     _setup_update_mocks(monkeypatch, tmp_path)
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/uv" if name == "uv" else None)
-    monkeypatch.setattr(hermes_main, "_load_installable_optional_extras", lambda: ["matrix", "mcp"])
+    monkeypatch.setattr(hermes_main, "_is_termux_env", lambda env=None: False)
+    monkeypatch.setattr(hermes_main, "_load_installable_optional_extras", lambda group="all": ["matrix", "mcp"])
 
     recorded = []
 
@@ -360,6 +398,7 @@ def test_cmd_update_succeeds_with_extras(monkeypatch, tmp_path):
     """When .[all] succeeds, no fallback should be attempted."""
     _setup_update_mocks(monkeypatch, tmp_path)
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr(hermes_main, "_is_termux_env", lambda env=None: False)
 
     recorded = []
 
@@ -382,6 +421,36 @@ def test_cmd_update_succeeds_with_extras(monkeypatch, tmp_path):
     install_cmds = [c for c in recorded if "pip" in c and "install" in c]
     assert len(install_cmds) == 1
     assert ".[all]" in install_cmds[0]
+
+
+def test_install_with_optional_fallback_honors_custom_group(monkeypatch):
+    """Termux update path should target .[termux-all] when requested."""
+    calls = []
+    monkeypatch.setattr(
+        hermes_main,
+        "_load_installable_optional_extras",
+        lambda group="all": ["termux", "mcp"] if group == "termux-all" else [],
+    )
+
+    def fake_run_with_heartbeat(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[-1] == ".[termux-all]":
+            raise CalledProcessError(returncode=1, cmd=cmd)
+        return None
+
+    monkeypatch.setattr(hermes_main, "_run_install_with_heartbeat", fake_run_with_heartbeat)
+
+    hermes_main._install_python_dependencies_with_optional_fallback(
+        ["/usr/bin/uv", "pip"],
+        group="termux-all",
+    )
+
+    assert calls == [
+        ["/usr/bin/uv", "pip", "install", "-e", ".[termux-all]"],
+        ["/usr/bin/uv", "pip", "install", "-e", "."],
+        ["/usr/bin/uv", "pip", "install", "-e", ".[termux]"],
+        ["/usr/bin/uv", "pip", "install", "-e", ".[mcp]"],
+    ]
 
 
 def test_install_heartbeat_prints_when_dependency_install_is_silent(monkeypatch, capsys):

@@ -472,15 +472,15 @@ class TestPersistence:
 
 class TestClientTools:
     def test_call_requires_args(self):
-        assert "required" in tools.a2a_call(agent="", message="hi")
-        assert "required" in tools.a2a_call(agent="x", message="")
+        assert "required" in tools.a2a_call({"agent": "", "message": "hi"})
+        assert "required" in tools.a2a_call({"agent": "x", "message": ""})
 
     def test_discover_requires_url(self):
-        assert "required" in tools.a2a_discover(url="")
+        assert "required" in tools.a2a_discover({"url": ""})
 
     def test_unknown_peer(self, monkeypatch):
         monkeypatch.setattr(tools, "_load_config", lambda: {"a2a_agents": {}})
-        out = tools.a2a_call(agent="ghost", message="hi")
+        out = tools.a2a_call({"agent": "ghost", "message": "hi"})
         assert "unknown agent" in out
 
     def test_discover_summarizes_v1_card(self, monkeypatch):
@@ -490,7 +490,7 @@ class TestClientTools:
             skills=[{"id": "s", "name": "search", "description": "web search"}],
         )
         monkeypatch.setattr(tools, "_http_get_json", lambda url, h, t: card)
-        out = tools.a2a_discover(url="http://localhost:9999")
+        out = tools.a2a_discover({"url": "http://localhost:9999"})
         assert "researcher" in out
         assert "search" in out
         assert "JSONRPC v1.0" in out
@@ -512,7 +512,7 @@ class TestClientTools:
             )
 
         monkeypatch.setattr(tools, "_http_post_json", fake_post)
-        out = tools.a2a_call(agent="r", message="my key sk-abcdefghij1234567890ABCD please")
+        out = tools.a2a_call({"agent": "r", "message": "my key sk-abcdefghij1234567890ABCD please"})
         assert "here is the answer" in out
 
         params = captured["body"]["params"]
@@ -557,13 +557,16 @@ class TestClientTools:
     def test_list_no_peers(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         monkeypatch.setattr(tools, "_load_config", lambda: {})
-        out = tools.a2a_list()
+        out = tools.a2a_list({})
         assert "No peers configured" in out
 
 
 class TestRegistryDispatchConvention:
     """Tools must accept the args-as-dict positional that registry.dispatch
-    uses (`entry.handler(args, **kwargs)`), not keyword params."""
+    uses (`entry.handler(args, **kwargs)`), not keyword params. Calling the
+    handlers with a single dict positional is what the live agent does — this
+    is the convention the direct-kwarg tests above did NOT exercise, which let
+    a 'dict has no attribute strip' bug ship to a live Tier-3 run."""
 
     def test_register_then_dispatch_via_registry(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -577,6 +580,9 @@ class TestRegistryDispatchConvention:
 
         tools.register_tools(_Ctx())
 
+        # Dispatch each tool the way the agent loop does: args as a dict.
+        # a2a_discover with empty url should return the 'required' guard
+        # string, NOT raise AttributeError on a dict.
         out = registry.dispatch("a2a_discover", {"url": ""})
         assert "required" in out and "AttributeError" not in out
 
@@ -604,6 +610,7 @@ class TestRegistryDispatchConvention:
                 protocol.build_task("t", "c1", protocol.STATE_COMPLETED, "PONG"))
 
         monkeypatch.setattr(tools, "_http_post_json", fake_post)
+        # 'agent_name' alias instead of 'agent'
         out = tools.a2a_call({"agent_name": "peer", "message": "ping"})
         assert captured.get("sent") is True
         assert "PONG" in out

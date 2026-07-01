@@ -38,8 +38,16 @@ _MEMORY_REVIEW_PROMPT = (
     "preferences, or personal details worth remembering?\n"
     "2. Has the user expressed expectations about how you should behave, their work "
     "style, or ways they want you to operate?\n\n"
-    "If something stands out, save it using the memory tool. "
-    "If nothing is worth saving, just say 'Nothing to save.' and stop."
+    "Save ONLY durable facts that will still be true and useful in a FUTURE, unrelated "
+    "conversation. Do NOT save anything tied to THIS session's task: what the user asked "
+    "this time, pending or multi-part questions, topics currently being researched, one-off "
+    "requests, or instructions like 'answer all of these' / 'do these three things'. That is "
+    "transient task state, not durable memory — recording it makes every later unrelated turn "
+    "inherit this session's agenda (e.g. re-answering an old question the user never re-asked). "
+    "Test: would this entry still make sense if the user opened a brand-new chat next week about "
+    "something completely different? If not, skip it.\n\n"
+    "If a durable preference or fact stands out, save it using the memory tool. "
+    "If nothing durable stands out, just say 'Nothing to save.' and stop."
 )
 
 _SKILL_REVIEW_PROMPT = (

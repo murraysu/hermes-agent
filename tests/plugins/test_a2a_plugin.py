@@ -548,6 +548,8 @@ class TestContextIdExtraction:
             adapter._message_handler = None
             adapter._pending_replies = {}
             adapter._pending_lock = __import__("threading").Lock()
+            adapter._push_lock = __import__("threading").Lock()
+            adapter._push_callbacks = {}
 
             params = {
                 "contextId": "ctx-from-caller-T1",
@@ -590,6 +592,8 @@ class TestContextIdExtraction:
             adapter._message_handler = None
             adapter._pending_replies = {}
             adapter._pending_lock = __import__("threading").Lock()
+            adapter._push_lock = __import__("threading").Lock()
+            adapter._push_callbacks = {}
 
             legacy_msg = protocol.text_message("user", "hello")
             legacy_msg["contextId"] = "ctx-legacy"
@@ -624,6 +628,8 @@ class TestContextIdExtraction:
             adapter._message_handler = None
             adapter._pending_replies = {}
             adapter._pending_lock = __import__("threading").Lock()
+            adapter._push_lock = __import__("threading").Lock()
+            adapter._push_callbacks = {}
 
             params = {"message": protocol.text_message("user", "hello")}
             adapter._handle_inbound_task(params)

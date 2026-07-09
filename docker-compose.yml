@@ -65,10 +65,11 @@ services:
       - HERMES_DASHBOARD=1
       - HERMES_DASHBOARD_HOST=0.0.0.0
       - HERMES_DASHBOARD_PORT=9119
-      # Upstream v2026.5.x now requires explicit opt-in to bind the dashboard
-      # to a non-loopback host without an auth provider (OAuth gate). We sit
-      # behind nginx + Cloudflare, so restore the pre-upgrade behaviour.
-      - HERMES_DASHBOARD_INSECURE=1
+      # Upstream v0.18.x removed HERMES_DASHBOARD_INSECURE: any non-loopback
+      # dashboard bind now fail-closes without an auth provider. Basic auth
+      # credentials live in the gitignored .env.
+      - HERMES_DASHBOARD_BASIC_AUTH_USERNAME=${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:?set in .env}
+      - HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:?set in .env}
       # API Keys
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}

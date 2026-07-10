@@ -96,7 +96,7 @@ services:
     container_name: hermes-redis
     command: redis-server --port 6379
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     restart: unless-stopped

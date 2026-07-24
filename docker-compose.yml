@@ -70,6 +70,10 @@ services:
       # credentials live in the gitignored .env.
       - HERMES_DASHBOARD_BASIC_AUTH_USERNAME=${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:?set in .env}
       - HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:?set in .env}
+      # pre_llm_call intention router calls LiteLLM, which enforces the master
+      # key since 2026-07-12. Without this the hook silently falls back to
+      # keyword matching (see hermes-hooks/intention_router.py).
+      - INTENTION_ROUTER_API_KEY=${LITELLM_MASTER_KEY:?set in .env}
       # API Keys
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}

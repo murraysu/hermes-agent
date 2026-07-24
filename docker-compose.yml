@@ -74,6 +74,11 @@ services:
       # key since 2026-07-12. Without this the hook silently falls back to
       # keyword matching (see hermes-hooks/intention_router.py).
       - INTENTION_ROUTER_API_KEY=${LITELLM_MASTER_KEY:?set in .env}
+      # Both defaults in intention_router.py name things that only resolve on
+      # node1's compose network. LiteLLM stayed there; channel_gw is a host
+      # service on the docker bridge, not localhost-inside-this-container.
+      - INTENTION_ROUTER_BASE_URL=http://192.168.101.7:4000/v1
+      - CHANNEL_GW_URL=http://172.22.0.1:5000
       # API Keys
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -130,3 +135,14 @@ volumes:
   cli-anything-data:
   hermes-data:
   redis-data:
+
+# The default bridge for this project is pinned so it lands on 172.22.0.1 on any
+# host. Several services outside this compose reach back through that address —
+# nginx upstreams, line-ingestion's bind address, group-secretary's outbox URL —
+# and Docker otherwise hands out whichever /16 happens to be free, which differs
+# between node1 and svc1.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.22.0.0/16

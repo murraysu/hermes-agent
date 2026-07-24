@@ -49,7 +49,7 @@ services:
     tty: true
 
   # ====================
-  # Hermes-Agent — AI Agent Hub with Agency-Agents
+  # Hermes-Agent — AI Agent Hub
   # ====================
   hermes-agent:
     build: .
@@ -77,12 +77,8 @@ services:
     volumes:
       # Persist Hermes data (sessions, logs, skills, configs)
       - hermes-data:/opt/data
-      # Mount Agency-Agents into Hermes
-      - /home/murray/agency-agents:/opt/data/agency-agents:ro
       # Mount Enterprise Skills into Hermes
       - /home/murray/enterprise-skills:/opt/data/skills/enterprise:ro
-      # Mount converted Agency skills into Hermes
-      - /home/murray/enterprise-skills/agency:/opt/data/skills/agency:ro
       # Docker socket for sandbox environments
       - /var/run/docker.sock:/var/run/docker.sock:ro
     command: ["gateway", "run", "--accept-hooks"]

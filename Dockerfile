@@ -181,6 +181,10 @@ RUN npm install --prefer-offline --no-audit && \
 COPY pyproject.toml uv.lock ./
 RUN touch ./README.md
 RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra anthropic --extra bedrock --extra azure-identity --extra hindsight --extra matrix --extra honcho
+# DDGS is the local deployment's no-key web-search backend. The immutable
+# runtime cannot add it to the sealed venv after startup, so bake the pinned
+# package into the image instead of relying on first-use installation.
+RUN uv pip install --python .venv/bin/python "ddgs==9.12.0"
 
 # ---------- Frontend build (cached independently from Python source) ----------
 # Copy only the frontend source trees first so that Python-only changes don't

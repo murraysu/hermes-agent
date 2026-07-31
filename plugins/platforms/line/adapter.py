@@ -114,6 +114,17 @@ LINE_LOADING_URL = "https://api.line.me/v2/bot/chat/loading/start"
 LINE_CONTENT_URL_FMT = "https://api-data.line.me/v2/bot/message/{message_id}/content"
 LINE_BOT_INFO_URL = "https://api.line.me/v2/bot/info"
 
+# Internal LINE group/room ingestion (shared with channel_gw during migration).
+LINE_INGESTION_FORWARD_URL = os.getenv("LINE_INGESTION_FORWARD_URL", "")
+LINE_INGESTION_INTERNAL_SECRET = os.getenv("LINE_INGESTION_INTERNAL_SECRET", "")
+LINE_INGESTION_FORWARD_TIMEOUT = float(os.getenv("LINE_INGESTION_FORWARD_TIMEOUT", "5.0"))
+LINE_GROUP_QA_ALLOWLIST = {
+    value.strip()
+    for value in os.getenv("LINE_GROUP_QA_ALLOWLIST", "").split(",")
+    if value.strip()
+}
+LINE_BOT_USER_ID = os.getenv("LINE_BOT_USER_ID", "")
+
 # LINE Messaging API hard limits
 LINE_PER_BUBBLE_CHARS = 5000  # Hard limit per text message object
 LINE_SAFE_BUBBLE_CHARS = 4500  # Conservative limit for chunking
@@ -468,6 +479,83 @@ def _allowed_for_source(
         rid = source.get("roomId", "")
         return bool(rid) and rid in room_ids
     return False
+
+
+def _line_ingestion_payload(
+    event: Dict[str, Any], destination: str = ""
+) -> Dict[str, Any]:
+    """Build the channel_gw-compatible payload for one raw LINE event."""
+    payload: Dict[str, Any] = {"events": [event]}
+    if destination:
+        payload["destination"] = destination
+    return payload
+
+
+async def _forward_line_ingestion_event(
+    event: Dict[str, Any], destination: str = ""
+) -> bool:
+    """Forward one verified group/room event to line_ingestion."""
+    if not LINE_INGESTION_FORWARD_URL or not LINE_INGESTION_INTERNAL_SECRET:
+        logger.error("LINE ingestion forwarder is not configured")
+        return False
+
+    import aiohttp
+
+    timeout = aiohttp.ClientTimeout(total=LINE_INGESTION_FORWARD_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+            async with session.post(
+                LINE_INGESTION_FORWARD_URL,
+                json=_line_ingestion_payload(event, destination),
+                headers={"X-Internal-Secret": LINE_INGESTION_INTERNAL_SECRET},
+            ) as response:
+                if response.status >= 300:
+                    body = await response.text()
+                    logger.error(
+                        "LINE ingestion forward failed: %s %s",
+                        response.status,
+                        body,
+                    )
+                    return False
+    except Exception:
+        logger.exception("LINE ingestion forward failed")
+        return False
+    return True
+
+
+def _line_mentions_self(event: Dict[str, Any], bot_user_id: str = "") -> bool:
+    """Return whether a LINE text event mentions this bot."""
+    message = event.get("message") or {}
+    self_user_id = bot_user_id or LINE_BOT_USER_ID
+    for mentionee in (message.get("mention") or {}).get("mentionees") or []:
+        if not isinstance(mentionee, dict):
+            continue
+        if mentionee.get("isSelf") is True:
+            return True
+        if self_user_id and mentionee.get("userId") == self_user_id:
+            return True
+    return False
+
+
+def _strip_self_mention(event: Dict[str, Any], bot_user_id: str = "") -> str:
+    """Remove this bot's mention spans from a LINE text message."""
+    message = event.get("message") or {}
+    text = message.get("text", "") or ""
+    self_user_id = bot_user_id or LINE_BOT_USER_ID
+    spans: List[Tuple[int, int]] = []
+    for mentionee in (message.get("mention") or {}).get("mentionees") or []:
+        if not isinstance(mentionee, dict):
+            continue
+        is_self = mentionee.get("isSelf") is True or (
+            self_user_id and mentionee.get("userId") == self_user_id
+        )
+        index, length = mentionee.get("index"), mentionee.get("length")
+        if is_self and isinstance(index, int) and isinstance(length, int):
+            spans.append((index, index + length))
+    for start, end in sorted(spans, reverse=True):
+        if 0 <= start < end <= len(text):
+            text = text[:start] + text[end:]
+    return text.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -942,18 +1030,31 @@ class LineAdapter(BasePlatformAdapter):
             return web.Response(status=400, text="bad json")
 
         events = payload.get("events", []) or []
+        destination = payload.get("destination", "") or ""
         for event in events:
             try:
-                await self._dispatch_event(event)
+                await self._dispatch_event(event, destination=destination)
             except Exception:
                 logger.exception("LINE: dispatch_event failed")
 
         return web.Response(status=200, text="ok")
 
-    async def _dispatch_event(self, event: Dict[str, Any]) -> None:
+    async def _dispatch_event(
+        self, event: Dict[str, Any], destination: str = ""
+    ) -> None:
         event_type = event.get("type")
         source = event.get("source") or {}
+        source_type = source.get("type", "")
         webhook_event_id = event.get("webhookEventId", "") or ""
+
+        # Ingestion is independent from assistant eligibility. Preserve the raw
+        # verified event and schedule forwarding before any allowlist decision.
+        if source_type in {"group", "room"}:
+            task = asyncio.create_task(
+                _forward_line_ingestion_event(event, destination)
+            )
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
 
         # Dedup retries (LINE webhooks may be re-delivered).
         if webhook_event_id and self._dedup.is_duplicate(webhook_event_id):
@@ -965,8 +1066,27 @@ class LineAdapter(BasePlatformAdapter):
         if self._bot_user_id and sender_user_id == self._bot_user_id:
             return
 
+        # Group/room events only reach the assistant when a text message
+        # explicitly mentions this bot and the chat is in the F4 QA allowlist.
+        # This gate replaces the general LINE_ALLOWED_GROUPS/ROOMS gate for
+        # group conversations; ingestion above always remains active.
+        if source_type in {"group", "room"}:
+            message = event.get("message") or {}
+            chat_id, _ = _resolve_chat(source)
+            if (
+                event_type != "message"
+                or message.get("type") != "text"
+                or chat_id not in LINE_GROUP_QA_ALLOWLIST
+                or not _line_mentions_self(event, self._bot_user_id or "")
+            ):
+                return
+            text = _strip_self_mention(event, self._bot_user_id or "")
+            if not text:
+                return
+            event = {**event, "message": {**message, "text": text}}
+
         # Allowlist gate.
-        if not _allowed_for_source(
+        if source_type not in {"group", "room"} and not _allowed_for_source(
             source,
             allow_all=self.allow_all,
             user_ids=self.allowed_users,

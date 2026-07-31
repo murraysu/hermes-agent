@@ -46,6 +46,9 @@ validate_config = _line.validate_config
 _standalone_send = _line._standalone_send
 _env_enablement = _line._env_enablement
 _MessageDeduplicator = _line._MessageDeduplicator
+_line_ingestion_payload = _line._line_ingestion_payload
+_line_mentions_self = _line._line_mentions_self
+_strip_self_mention = _line._strip_self_mention
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +106,161 @@ class TestAllowlist:
     def test_user_in_allowlist_passes(self):
         src = {"type": "user", "userId": "Uok"}
         assert _allowed_for_source(src, allow_all=False, user_ids={"Uok"}, group_ids=set(), room_ids=set())
+
+
+class TestGroupForwardAndMentionGate:
+    @pytest.fixture
+    def adapter(self, monkeypatch):
+        monkeypatch.delenv("LINE_CHANNEL_ACCESS_TOKEN", raising=False)
+        monkeypatch.delenv("LINE_CHANNEL_SECRET", raising=False)
+        monkeypatch.setattr(_line, "LINE_GROUP_QA_ALLOWLIST", {"Cqa", "Rqa"})
+        from gateway.config import PlatformConfig
+
+        cfg = PlatformConfig(enabled=True, extra={
+            "channel_access_token": "tok",
+            "channel_secret": "sec",
+        })
+        ad = LineAdapter(cfg)
+        ad.handle_message = AsyncMock()
+        return ad
+
+    @staticmethod
+    def _event(*, source_type="group", chat_id="Cqa", mention=False, text="hello"):
+        source_id_key = "groupId" if source_type == "group" else "roomId"
+        message = {"id": "msg-1", "type": "text", "text": text}
+        if mention:
+            message["mention"] = {
+                "mentionees": [{"index": 0, "length": 4, "isSelf": True}]
+            }
+        return {
+            "type": "message",
+            "webhookEventId": f"evt-{source_type}-{chat_id}-{mention}",
+            "replyToken": "reply-token",
+            "source": {"type": source_type, source_id_key: chat_id, "userId": "Uasker"},
+            "message": message,
+        }
+
+    def test_plain_group_is_forwarded_before_allowlist_but_not_sent_to_agent(
+        self, adapter, monkeypatch
+    ):
+        forward = AsyncMock(return_value=True)
+        monkeypatch.setattr(_line, "_forward_line_ingestion_event", forward)
+
+        event = self._event(chat_id="Cnot-in-line-allowed-groups")
+        async def dispatch():
+            await adapter._dispatch_event(event, destination="Udestination")
+            await asyncio.sleep(0)
+
+        asyncio.run(dispatch())
+
+        forward.assert_awaited_once_with(event, "Udestination")
+        adapter.handle_message.assert_not_awaited()
+
+    @pytest.mark.parametrize("source_type,chat_id", [("group", "Cqa"), ("room", "Rqa")])
+    def test_allowlisted_self_mention_is_forwarded_and_cleaned_for_agent(
+        self, adapter, monkeypatch, source_type, chat_id
+    ):
+        forward = AsyncMock(return_value=True)
+        monkeypatch.setattr(_line, "_forward_line_ingestion_event", forward)
+        event = self._event(
+            source_type=source_type,
+            chat_id=chat_id,
+            mention=True,
+            text="@bot 請摘要",
+        )
+
+        async def dispatch():
+            await adapter._dispatch_event(event, destination="Udestination")
+            await asyncio.sleep(0)
+
+        asyncio.run(dispatch())
+
+        forward.assert_awaited_once_with(event, "Udestination")
+        adapter.handle_message.assert_awaited_once()
+        message_event = adapter.handle_message.await_args.args[0]
+        assert message_event.text == "請摘要"
+        assert message_event.source.chat_id == chat_id
+        assert event["message"]["text"] == "@bot 請摘要"
+
+    def test_self_mention_outside_group_qa_allowlist_only_forwards(
+        self, adapter, monkeypatch
+    ):
+        forward = AsyncMock(return_value=True)
+        monkeypatch.setattr(_line, "_forward_line_ingestion_event", forward)
+
+        event = self._event(chat_id="Cblocked", mention=True, text="@bot secret")
+        async def dispatch():
+            await adapter._dispatch_event(event)
+            await asyncio.sleep(0)
+
+        asyncio.run(dispatch())
+
+        forward.assert_awaited_once_with(event, "")
+        adapter.handle_message.assert_not_awaited()
+
+    def test_ingestion_payload_matches_channel_gateway_schema(self):
+        event = self._event()
+        assert _line_ingestion_payload(event, "Udestination") == {
+            "events": [event],
+            "destination": "Udestination",
+        }
+        assert _line_ingestion_payload(event, "") == {"events": [event]}
+
+    def test_ingestion_forward_uses_internal_secret_header(self, monkeypatch):
+        import sys
+        from types import SimpleNamespace
+
+        calls = []
+
+        class Response:
+            status = 200
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+        class Session:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            def post(self, url, **kwargs):
+                calls.append((url, kwargs))
+                return Response()
+
+        fake_aiohttp = SimpleNamespace(
+            ClientTimeout=lambda **kwargs: kwargs,
+            ClientSession=lambda **_kwargs: Session(),
+        )
+        monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
+        monkeypatch.setattr(_line, "LINE_INGESTION_FORWARD_URL", "http://ingest/internal/line-events")
+        monkeypatch.setattr(_line, "LINE_INGESTION_INTERNAL_SECRET", "test-secret")
+        event = self._event()
+
+        assert asyncio.run(
+            _line._forward_line_ingestion_event(event, "Udestination")
+        )
+        assert calls == [(
+            "http://ingest/internal/line-events",
+            {
+                "json": {"events": [event], "destination": "Udestination"},
+                "headers": {"X-Internal-Secret": "test-secret"},
+            },
+        )]
+
+    def test_self_mention_helpers_match_line_spans(self, monkeypatch):
+        monkeypatch.setattr(_line, "LINE_BOT_USER_ID", "Ubot")
+        event = self._event(text="前面 @bot 後面")
+        event["message"]["mention"] = {
+            "mentionees": [{"index": 3, "length": 4, "userId": "Ubot"}]
+        }
+
+        assert _line_mentions_self(event)
+        assert _strip_self_mention(event) == "前面  後面"
 
 
 # ---------------------------------------------------------------------------
@@ -506,4 +664,3 @@ class TestMediaPublicUrlGuard:
         result = asyncio.run(ad.send_image_file("Uchat", str(img)))
         assert not result.success
         assert "LINE_PUBLIC_URL" in (result.error or "")
-

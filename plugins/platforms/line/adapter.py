@@ -100,6 +100,8 @@ from gateway.platforms.base import (
 )
 from gateway.config import Platform
 
+from plugins.platforms.line.identity import IdentityResolver, BindStateStore
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -769,6 +771,12 @@ class LineAdapter(BasePlatformAdapter):
         # button per chat at a time. Postback cache request_id keyed by chat_id.
         self._pending_buttons: Dict[str, str] = {}
 
+        # Identity binding gate (sub-task 2 of LINE migration spec).
+        # Resolves LINE user_id → employee_id via admin.db (read-only)
+        # and writes new bindings through the Admin Panel /api/bind API.
+        self._identity = IdentityResolver()
+        self._bind_state = BindStateStore()
+
     # ------------------------------------------------------------------
     # Connection lifecycle
     # ------------------------------------------------------------------
@@ -992,6 +1000,18 @@ class LineAdapter(BasePlatformAdapter):
                 time.time() + LINE_REPLY_TOKEN_TTL_SECONDS,
             )
 
+        # ── Identity binding gate for 1:1 (DM) messages ──────────────────
+        # Only bound employees may reach the agent.  Unbound users are
+        # intercepted here and never sent to handle_message (→ LLM).
+        if chat_type == "dm":
+            if await self._handle_identity_gate(
+                chat_id=chat_id,
+                user_id=user_id,
+                msg_type=msg_type,
+                text=msg.get("text", "") if msg_type == "text" else "",
+            ):
+                return  # message handled by binding flow — do not proceed to agent
+
         # Handle media inbound — fetch the binary, cache it, and surface a
         # vision-tool-friendly local path on the MessageEvent.
         media_urls: List[str] = []
@@ -1043,6 +1063,78 @@ class LineAdapter(BasePlatformAdapter):
         )
 
         await self.handle_message(event_obj)
+
+    async def _handle_identity_gate(
+        self,
+        chat_id: str,
+        user_id: str,
+        msg_type: str,
+        text: str,
+    ) -> bool:
+        """Check identity binding for DM messages.
+
+        Returns ``True`` if the message was handled by the binding flow
+        (should NOT proceed to the agent).  Returns ``False`` if the user
+        is bound and the message should proceed to normal processing.
+
+        Mirrors channel_gw's ``_handle_line_message`` identity flow
+        (lines 1436–1484 of channel_gw/main.py):
+        1. If bound → allow through.
+        2. If awaiting_nickname + text → treat as nickname, call bind API.
+        3. If not bound → set awaiting_nickname state, prompt.
+        """
+        employee_id = self._identity.resolve("line", user_id)
+
+        if employee_id:
+            # Bound — proceed to agent.
+            return False
+
+        # ── Not bound ─────────────────────────────────────────────────────
+        if self._bind_state.is_awaiting(user_id):
+            # User is expecting to input a nickname.
+            if msg_type != "text":
+                # Non-text while awaiting — re-prompt without consuming the message.
+                await self._send_binding_prompt(chat_id)
+                return True
+
+            nickname = text.strip()
+            result = await self._identity.bind("line", user_id, nickname)
+
+            if result.get("ok"):
+                self._bind_state.clear(user_id)
+                reply = result.get("message", "綁定成功！")
+            else:
+                code = result.get("code", "")
+                if code == "NOT_FOUND":
+                    reply = (
+                        f"找不到暱稱「{nickname}」，請確認您的英文暱稱並重新輸入：\n"
+                        "（若不確定暱稱請聯繫管理員）"
+                    )
+                elif code in ("ALREADY_BOUND", "EMPLOYEE_BOUND"):
+                    self._bind_state.clear(user_id)
+                    reply = result.get("message", "此帳號已被綁定。")
+                else:
+                    reply = result.get("message", "綁定失敗，請稍後再試。")
+
+            await self._send_text_chunks(chat_id, reply, force_push=False)
+            return True
+
+        # Not bound and not awaiting — set state and prompt.
+        self._bind_state.set_awaiting(user_id)
+        await self._send_binding_prompt(chat_id)
+        return True
+
+    async def _send_binding_prompt(self, chat_id: str) -> None:
+        """Send the nickname binding prompt to a DM chat.
+
+        Uses the stashed reply token (consumed by ``_send_text_chunks``)
+        so the prompt is free (Reply API) rather than metered (Push).
+        """
+        prompt = (
+            "您尚未綁定員工帳號。\n"
+            "請輸入您的英文暱稱（Admin Panel 帳號中的 Nickname 欄位）進行自動綁定："
+        )
+        await self._send_text_chunks(chat_id, prompt, force_push=False)
 
     async def _handle_postback_event(self, event: Dict[str, Any]) -> None:
         """User tapped the slow-LLM postback button — deliver cached payload."""

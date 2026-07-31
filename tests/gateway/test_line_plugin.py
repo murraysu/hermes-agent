@@ -435,9 +435,13 @@ class TestRegister:
     class _FakeCtx:
         def __init__(self):
             self.kwargs = None
+            self.hooks = {}
 
         def register_platform(self, **kw):
             self.kwargs = kw
+
+        def register_hook(self, name, fn):
+            self.hooks[name] = fn
 
 
     def test_register_advertises_required_env(self):

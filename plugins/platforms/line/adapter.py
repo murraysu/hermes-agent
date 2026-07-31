@@ -102,6 +102,12 @@ from gateway.config import Platform
 
 from plugins.platforms.line.identity import IdentityResolver, BindStateStore
 from plugins.platforms.line.personalization import pre_llm_call_hook
+from plugins.platforms.line.media import (
+    check_file_extension,
+    is_supported_file_type,
+    get_file_extension,
+    unsupported_file_message,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1142,15 +1148,31 @@ class LineAdapter(BasePlatformAdapter):
         if msg_type == "text":
             text = msg.get("text", "") or ""
         elif msg_type in ("image", "audio", "video", "file"):
-            local_path, media_type = await self._download_media(
-                message_id,
-                msg_type,
-                filename=msg.get("fileName") or msg.get("file_name"),
-            )
-            if local_path:
-                media_urls.append(local_path)
-                media_types.append(media_type)
-            text = f"[{msg_type}]"
+            filename = msg.get("fileName") or msg.get("file_name")
+            if msg_type == "file":
+                is_supported, reject_msg = check_file_extension(filename)
+                if not is_supported:
+                    text = reject_msg
+                else:
+                    local_path, media_type = await self._download_media(
+                        message_id,
+                        msg_type,
+                        filename=filename,
+                    )
+                    if local_path:
+                        media_urls.append(local_path)
+                        media_types.append(media_type)
+                    text = f"[{msg_type}]"
+            else:
+                local_path, media_type = await self._download_media(
+                    message_id,
+                    msg_type,
+                    filename=filename,
+                )
+                if local_path:
+                    media_urls.append(local_path)
+                    media_types.append(media_type)
+                text = f"[{msg_type}]"
         elif msg_type == "sticker":
             keywords = msg.get("keywords") or []
             text = f"[sticker: {', '.join(keywords)}]" if keywords else "[sticker]"

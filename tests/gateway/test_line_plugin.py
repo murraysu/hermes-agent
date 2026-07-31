@@ -49,6 +49,9 @@ _MessageDeduplicator = _line._MessageDeduplicator
 _line_ingestion_payload = _line._line_ingestion_payload
 _line_mentions_self = _line._line_mentions_self
 _strip_self_mention = _line._strip_self_mention
+check_file_extension = _line.check_file_extension
+is_supported_file_type = _line.is_supported_file_type
+get_file_extension = _line.get_file_extension
 
 
 # ---------------------------------------------------------------------------
@@ -664,3 +667,109 @@ class TestMediaPublicUrlGuard:
         result = asyncio.run(ad.send_image_file("Uchat", str(img)))
         assert not result.success
         assert "LINE_PUBLIC_URL" in (result.error or "")
+
+
+# ---------------------------------------------------------------------------
+# 11. File extension whitelist (media.py)
+# ---------------------------------------------------------------------------
+
+class TestFileExtensionWhitelist:
+
+    def test_supported_extensions(self):
+        for ext in ("pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv"):
+            assert is_supported_file_type(f"file.{ext}")
+
+    def test_uppercase_extension_supported(self):
+        assert is_supported_file_type("REPORT.PDF")
+
+    def test_unsupported_extensions_rejected(self):
+        for ext in ("exe", "sh", "bat", "py", "js", "zip", "rar", "7z", "html", "php"):
+            assert not is_supported_file_type(f"malicious.{ext}")
+
+    def test_no_extension_rejected(self):
+        assert not is_supported_file_type("noextension")
+
+    def test_none_filename_rejected(self):
+        assert not is_supported_file_type(None)
+
+    def test_empty_filename_rejected(self):
+        assert not is_supported_file_type("")
+
+    def test_get_extension_strips_dot_and_lowercases(self):
+        assert get_file_extension("FILE.PDF") == "pdf"
+        assert get_file_extension("noext") == ""
+        assert get_file_extension(None) == ""
+
+    def test_check_file_extension_supported(self):
+        ok, msg = check_file_extension("doc.pdf")
+        assert ok is True
+        assert msg == ""
+
+    def test_check_file_extension_unsupported(self):
+        ok, msg = check_file_extension("malware.exe")
+        assert ok is False
+        assert "不支援" in msg
+        assert "exe" in msg
+
+    def test_check_file_extension_none(self):
+        ok, msg = check_file_extension(None)
+        assert ok is False
+        assert "不支援" in msg
+
+
+# ---------------------------------------------------------------------------
+# 12. File message extension filtering in _handle_message_event
+# ---------------------------------------------------------------------------
+
+class TestFileExtensionFiltering:
+
+    @pytest.fixture
+    def adapter(self, monkeypatch):
+        monkeypatch.delenv("LINE_CHANNEL_ACCESS_TOKEN", raising=False)
+        monkeypatch.delenv("LINE_CHANNEL_SECRET", raising=False)
+        from gateway.config import PlatformConfig
+        cfg = PlatformConfig(enabled=True, extra={
+            "channel_access_token": "tok",
+            "channel_secret": "sec",
+        })
+        ad = LineAdapter(cfg)
+        ad._client = MagicMock()
+        ad._client.fetch_content = AsyncMock(return_value=b"line-bytes")
+        ad.handle_message = AsyncMock()
+        return ad
+
+    def _file_event(self, filename):
+        return {
+            "type": "message",
+            "replyToken": "reply-token",
+            "source": {"type": "group", "groupId": "Cline", "userId": "Uline"},
+            "message": {"type": "file", "id": "file-1", "fileName": filename},
+        }
+
+    def _captured_event(self, adapter):
+        adapter.handle_message.assert_awaited_once()
+        return adapter.handle_message.await_args.args[0]
+
+    def test_supported_file_downloaded_and_queued(self, adapter):
+        with patch.object(_line, "cache_document_from_bytes", return_value="/cache/doc.pdf") as cache:
+            asyncio.run(adapter._handle_message_event(self._file_event("doc.pdf")))
+        cache.assert_called_once()
+        event = self._captured_event(adapter)
+        assert event.media_urls == ["/cache/doc.pdf"]
+        assert event.message_type is _line.MessageType.DOCUMENT
+
+    def test_unsupported_file_not_downloaded(self, adapter):
+        with patch.object(_line, "cache_document_from_bytes") as cache:
+            asyncio.run(adapter._handle_message_event(self._file_event("malware.exe")))
+        cache.assert_not_called()
+        event = self._captured_event(adapter)
+        assert event.media_urls == []
+        assert "不支援" in event.text
+        assert "exe" in event.text
+
+    def test_unsupported_file_no_media_urls(self, adapter):
+        asyncio.run(adapter._handle_message_event(self._file_event("script.sh")))
+        event = self._captured_event(adapter)
+        assert event.media_urls == []
+        assert event.media_types == []
+        assert "不支援" in event.text

@@ -63,3 +63,13 @@ optional_env:
     description: "Seconds before the slow-LLM postback button fires (default: 45; set 0 to disable and always Push-fallback)"
     prompt: "Slow response threshold (seconds)"
     password: false
+  - name: ADMIN_DB_PATH
+    description: "Path to the shared admin.db SQLite database (read-only for identity resolution). Default: ~/services/admin_panel/admin.db"
+    prompt: "Admin DB path"
+    password: false
+  - name: ADMIN_PANEL_URL
+    description: "Admin Panel base URL for the /api/bind endpoint (identity binding). Default: http://host.docker.internal:8888"
+    prompt: "Admin Panel URL"
+    password: false
+hooks:
+  - pre_llm_call

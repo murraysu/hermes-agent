@@ -23,7 +23,9 @@ button and always Push-fallback instead.
 
 **Three-allowlist gating.** Separate allowlists for users (U-prefixed),
 groups (C-prefixed), and rooms (R-prefixed). ``LINE_ALLOW_ALL_USERS=true``
-is a dev-only escape hatch.
+is a dev-only escape hatch.  ``LINE_GROUP_QA_ALLOW_ALL=true`` bypasses the
+group/room QA allowlist (any group that @mentions the bot gets a reply)
+without relaxing the @mention requirement.
 
 **Media via public HTTPS.** LINE's Messaging API does *not* accept
 binary uploads — images, audio, and video must be reachable HTTPS URLs.
@@ -100,6 +102,15 @@ from gateway.platforms.base import (
 )
 from gateway.config import Platform
 
+from plugins.platforms.line.identity import IdentityResolver, BindStateStore
+from plugins.platforms.line.personalization import pre_llm_call_hook
+from plugins.platforms.line.media import (
+    check_file_extension,
+    is_supported_file_type,
+    get_file_extension,
+    unsupported_file_message,
+)
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -110,6 +121,17 @@ LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 LINE_LOADING_URL = "https://api.line.me/v2/bot/chat/loading/start"
 LINE_CONTENT_URL_FMT = "https://api-data.line.me/v2/bot/message/{message_id}/content"
 LINE_BOT_INFO_URL = "https://api.line.me/v2/bot/info"
+
+# Internal LINE group/room ingestion (shared with channel_gw during migration).
+LINE_INGESTION_FORWARD_URL = os.getenv("LINE_INGESTION_FORWARD_URL", "")
+LINE_INGESTION_INTERNAL_SECRET = os.getenv("LINE_INGESTION_INTERNAL_SECRET", "")
+LINE_INGESTION_FORWARD_TIMEOUT = float(os.getenv("LINE_INGESTION_FORWARD_TIMEOUT", "5.0"))
+LINE_GROUP_QA_ALLOWLIST = {
+    value.strip()
+    for value in os.getenv("LINE_GROUP_QA_ALLOWLIST", "").split(",")
+    if value.strip()
+}
+LINE_BOT_USER_ID = os.getenv("LINE_BOT_USER_ID", "")
 
 # LINE Messaging API hard limits
 LINE_PER_BUBBLE_CHARS = 5000  # Hard limit per text message object
@@ -467,6 +489,83 @@ def _allowed_for_source(
     return False
 
 
+def _line_ingestion_payload(
+    event: Dict[str, Any], destination: str = ""
+) -> Dict[str, Any]:
+    """Build the channel_gw-compatible payload for one raw LINE event."""
+    payload: Dict[str, Any] = {"events": [event]}
+    if destination:
+        payload["destination"] = destination
+    return payload
+
+
+async def _forward_line_ingestion_event(
+    event: Dict[str, Any], destination: str = ""
+) -> bool:
+    """Forward one verified group/room event to line_ingestion."""
+    if not LINE_INGESTION_FORWARD_URL or not LINE_INGESTION_INTERNAL_SECRET:
+        logger.error("LINE ingestion forwarder is not configured")
+        return False
+
+    import aiohttp
+
+    timeout = aiohttp.ClientTimeout(total=LINE_INGESTION_FORWARD_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+            async with session.post(
+                LINE_INGESTION_FORWARD_URL,
+                json=_line_ingestion_payload(event, destination),
+                headers={"X-Internal-Secret": LINE_INGESTION_INTERNAL_SECRET},
+            ) as response:
+                if response.status >= 300:
+                    body = await response.text()
+                    logger.error(
+                        "LINE ingestion forward failed: %s %s",
+                        response.status,
+                        body,
+                    )
+                    return False
+    except Exception:
+        logger.exception("LINE ingestion forward failed")
+        return False
+    return True
+
+
+def _line_mentions_self(event: Dict[str, Any], bot_user_id: str = "") -> bool:
+    """Return whether a LINE text event mentions this bot."""
+    message = event.get("message") or {}
+    self_user_id = bot_user_id or LINE_BOT_USER_ID
+    for mentionee in (message.get("mention") or {}).get("mentionees") or []:
+        if not isinstance(mentionee, dict):
+            continue
+        if mentionee.get("isSelf") is True:
+            return True
+        if self_user_id and mentionee.get("userId") == self_user_id:
+            return True
+    return False
+
+
+def _strip_self_mention(event: Dict[str, Any], bot_user_id: str = "") -> str:
+    """Remove this bot's mention spans from a LINE text message."""
+    message = event.get("message") or {}
+    text = message.get("text", "") or ""
+    self_user_id = bot_user_id or LINE_BOT_USER_ID
+    spans: List[Tuple[int, int]] = []
+    for mentionee in (message.get("mention") or {}).get("mentionees") or []:
+        if not isinstance(mentionee, dict):
+            continue
+        is_self = mentionee.get("isSelf") is True or (
+            self_user_id and mentionee.get("userId") == self_user_id
+        )
+        index, length = mentionee.get("index"), mentionee.get("length")
+        if is_self and isinstance(index, int) and isinstance(length, int):
+            spans.append((index, index + length))
+    for start, end in sorted(spans, reverse=True):
+        if 0 <= start < end <= len(text):
+            text = text[:start] + text[end:]
+    return text.strip()
+
+
 # ---------------------------------------------------------------------------
 # LINE Reply / Push HTTP client
 # ---------------------------------------------------------------------------
@@ -712,6 +811,10 @@ class LineAdapter(BasePlatformAdapter):
         self.allow_all = _truthy_env(
             "LINE_ALLOW_ALL_USERS", bool(extra.get("allow_all_users", False))
         )
+        # Group QA allow-all: when true, any group/room that @mentions the bot
+        # triggers a reply, regardless of LINE_GROUP_QA_ALLOWLIST.  The @mention
+        # requirement is never relaxed — this only bypasses the allowlist.
+        self.group_qa_allow_all = _truthy_env("LINE_GROUP_QA_ALLOW_ALL", False)
         self.allowed_users = _csv_set(
             os.getenv("LINE_ALLOWED_USERS", "")
         ) | set(extra.get("allowed_users", []))
@@ -768,6 +871,12 @@ class LineAdapter(BasePlatformAdapter):
         # Pending-button slot per chat — ensures one outstanding postback
         # button per chat at a time. Postback cache request_id keyed by chat_id.
         self._pending_buttons: Dict[str, str] = {}
+
+        # Identity binding gate (sub-task 2 of LINE migration spec).
+        # Resolves LINE user_id → employee_id via admin.db (read-only)
+        # and writes new bindings through the Admin Panel /api/bind API.
+        self._identity = IdentityResolver()
+        self._bind_state = BindStateStore()
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -933,18 +1042,31 @@ class LineAdapter(BasePlatformAdapter):
             return web.Response(status=400, text="bad json")
 
         events = payload.get("events", []) or []
+        destination = payload.get("destination", "") or ""
         for event in events:
             try:
-                await self._dispatch_event(event)
+                await self._dispatch_event(event, destination=destination)
             except Exception:
                 logger.exception("LINE: dispatch_event failed")
 
         return web.Response(status=200, text="ok")
 
-    async def _dispatch_event(self, event: Dict[str, Any]) -> None:
+    async def _dispatch_event(
+        self, event: Dict[str, Any], destination: str = ""
+    ) -> None:
         event_type = event.get("type")
         source = event.get("source") or {}
+        source_type = source.get("type", "")
         webhook_event_id = event.get("webhookEventId", "") or ""
+
+        # Ingestion is independent from assistant eligibility. Preserve the raw
+        # verified event and schedule forwarding before any allowlist decision.
+        if source_type in {"group", "room"}:
+            task = asyncio.create_task(
+                _forward_line_ingestion_event(event, destination)
+            )
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
 
         # Dedup retries (LINE webhooks may be re-delivered).
         if webhook_event_id and self._dedup.is_duplicate(webhook_event_id):
@@ -956,8 +1078,30 @@ class LineAdapter(BasePlatformAdapter):
         if self._bot_user_id and sender_user_id == self._bot_user_id:
             return
 
+        # Group/room events only reach the assistant when a text message
+        # explicitly mentions this bot and the chat is in the F4 QA allowlist
+        # (or LINE_GROUP_QA_ALLOW_ALL is set).  The @mention requirement is
+        # never bypassed — it is the only thing that prevents the bot from
+        # replying to every group message.  This gate replaces the general
+        # LINE_ALLOWED_GROUPS/ROOMS gate for group conversations; ingestion
+        # above always remains active.
+        if source_type in {"group", "room"}:
+            message = event.get("message") or {}
+            chat_id, _ = _resolve_chat(source)
+            if (
+                event_type != "message"
+                or message.get("type") != "text"
+                or (not self.group_qa_allow_all and chat_id not in LINE_GROUP_QA_ALLOWLIST)
+                or not _line_mentions_self(event, self._bot_user_id or "")
+            ):
+                return
+            text = _strip_self_mention(event, self._bot_user_id or "")
+            if not text:
+                return
+            event = {**event, "message": {**message, "text": text}}
+
         # Allowlist gate.
-        if not _allowed_for_source(
+        if source_type not in {"group", "room"} and not _allowed_for_source(
             source,
             allow_all=self.allow_all,
             user_ids=self.allowed_users,
@@ -992,6 +1136,18 @@ class LineAdapter(BasePlatformAdapter):
                 time.time() + LINE_REPLY_TOKEN_TTL_SECONDS,
             )
 
+        # ── Identity binding gate for 1:1 (DM) messages ──────────────────
+        # Only bound employees may reach the agent.  Unbound users are
+        # intercepted here and never sent to handle_message (→ LLM).
+        if chat_type == "dm":
+            if await self._handle_identity_gate(
+                chat_id=chat_id,
+                user_id=user_id,
+                msg_type=msg_type,
+                text=msg.get("text", "") if msg_type == "text" else "",
+            ):
+                return  # message handled by binding flow — do not proceed to agent
+
         # Handle media inbound — fetch the binary, cache it, and surface a
         # vision-tool-friendly local path on the MessageEvent.
         media_urls: List[str] = []
@@ -1001,15 +1157,31 @@ class LineAdapter(BasePlatformAdapter):
         if msg_type == "text":
             text = msg.get("text", "") or ""
         elif msg_type in ("image", "audio", "video", "file"):
-            local_path, media_type = await self._download_media(
-                message_id,
-                msg_type,
-                filename=msg.get("fileName") or msg.get("file_name"),
-            )
-            if local_path:
-                media_urls.append(local_path)
-                media_types.append(media_type)
-            text = f"[{msg_type}]"
+            filename = msg.get("fileName") or msg.get("file_name")
+            if msg_type == "file":
+                is_supported, reject_msg = check_file_extension(filename)
+                if not is_supported:
+                    await self._send_text_chunks(chat_id, reject_msg, force_push=False)
+                    return
+                local_path, media_type = await self._download_media(
+                    message_id,
+                    msg_type,
+                    filename=filename,
+                )
+                if local_path:
+                    media_urls.append(local_path)
+                    media_types.append(media_type)
+                text = f"[{msg_type}]"
+            else:
+                local_path, media_type = await self._download_media(
+                    message_id,
+                    msg_type,
+                    filename=filename,
+                )
+                if local_path:
+                    media_urls.append(local_path)
+                    media_types.append(media_type)
+                text = f"[{msg_type}]"
         elif msg_type == "sticker":
             keywords = msg.get("keywords") or []
             text = f"[sticker: {', '.join(keywords)}]" if keywords else "[sticker]"
@@ -1043,6 +1215,78 @@ class LineAdapter(BasePlatformAdapter):
         )
 
         await self.handle_message(event_obj)
+
+    async def _handle_identity_gate(
+        self,
+        chat_id: str,
+        user_id: str,
+        msg_type: str,
+        text: str,
+    ) -> bool:
+        """Check identity binding for DM messages.
+
+        Returns ``True`` if the message was handled by the binding flow
+        (should NOT proceed to the agent).  Returns ``False`` if the user
+        is bound and the message should proceed to normal processing.
+
+        Mirrors channel_gw's ``_handle_line_message`` identity flow
+        (lines 1436–1484 of channel_gw/main.py):
+        1. If bound → allow through.
+        2. If awaiting_nickname + text → treat as nickname, call bind API.
+        3. If not bound → set awaiting_nickname state, prompt.
+        """
+        employee_id = self._identity.resolve("line", user_id)
+
+        if employee_id:
+            # Bound — proceed to agent.
+            return False
+
+        # ── Not bound ─────────────────────────────────────────────────────
+        if self._bind_state.is_awaiting(user_id):
+            # User is expecting to input a nickname.
+            if msg_type != "text":
+                # Non-text while awaiting — re-prompt without consuming the message.
+                await self._send_binding_prompt(chat_id)
+                return True
+
+            nickname = text.strip()
+            result = await self._identity.bind("line", user_id, nickname)
+
+            if result.get("ok"):
+                self._bind_state.clear(user_id)
+                reply = result.get("message", "綁定成功！")
+            else:
+                code = result.get("code", "")
+                if code == "NOT_FOUND":
+                    reply = (
+                        f"找不到暱稱「{nickname}」，請確認您的英文暱稱並重新輸入：\n"
+                        "（若不確定暱稱請聯繫管理員）"
+                    )
+                elif code in ("ALREADY_BOUND", "EMPLOYEE_BOUND"):
+                    self._bind_state.clear(user_id)
+                    reply = result.get("message", "此帳號已被綁定。")
+                else:
+                    reply = result.get("message", "綁定失敗，請稍後再試。")
+
+            await self._send_text_chunks(chat_id, reply, force_push=False)
+            return True
+
+        # Not bound and not awaiting — set state and prompt.
+        self._bind_state.set_awaiting(user_id)
+        await self._send_binding_prompt(chat_id)
+        return True
+
+    async def _send_binding_prompt(self, chat_id: str) -> None:
+        """Send the nickname binding prompt to a DM chat.
+
+        Uses the stashed reply token (consumed by ``_send_text_chunks``)
+        so the prompt is free (Reply API) rather than metered (Push).
+        """
+        prompt = (
+            "您尚未綁定員工帳號。\n"
+            "請輸入您的英文暱稱（Admin Panel 帳號中的 Nickname 欄位）進行自動綁定："
+        )
+        await self._send_text_chunks(chat_id, prompt, force_push=False)
 
     async def _handle_postback_event(self, event: Dict[str, Any]) -> None:
         """User tapped the slow-LLM postback button — deliver cached payload."""
@@ -1732,3 +1976,7 @@ def register(ctx) -> None:
             "to fetch the reply via a fresh free token."
         ),
     )
+
+    # Soul/skill personalization: inject employee persona + skills into the
+    # pre_llm_call hook context.  See personalization.py for the full design.
+    ctx.register_hook("pre_llm_call", pre_llm_call_hook)

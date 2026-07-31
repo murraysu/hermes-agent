@@ -73,18 +73,22 @@ print('exists:', r._admin_db.exists())
 ```
 預期輸出：`exists: True`，且無 `WARNING` 日誌。
 
-### 1.3 設定 LINE_GROUP_QA_ALLOWLIST
+### 1.3 設定 LINE_GROUP_QA_ALLOW_ALL（Murray 選的）
 
 **修改目標**：`docker-compose.yml` → `services.hermes-agent.environment`
 
 **加入行**：
 ```yaml
-      - LINE_GROUP_QA_ALLOWLIST=C16015a313fd45352dc63fdb63a1f45de
+      - LINE_GROUP_QA_ALLOW_ALL=true
 ```
 
-**說明**：此值來源為 `channel_gw` 現行的 `LINE_GROUP_QA_ALLOWLIST`（F4 群組問答的允許清單）。群組訊息只有在此清單內**且** @到 bot 本身時才會觸發 agent 回覆。空值採 fail-closed，不會讓任何群組觸發 agent。
+**說明**：Murray 於 2026-08-01 決定啟用此旗標。當 `LINE_GROUP_QA_ALLOW_ALL=true` 時，
+**任何群組**只要 @ 到 bot 本身，就會觸發 agent 回覆，**不需要** `LINE_GROUP_QA_ALLOWLIST`
+逐一設定。@mention 的要求絕對不放寬 — 群組內沒有 @bot 的訊息仍然只轩發給 line_ingestion，
+不會觸發回答。
 
-**取得方式**：從 `~/ai-stack/config/rendered/svc1/channel-gw/channel-gw.env` 讀取 `LINE_GROUP_QA_ALLOWLIST` 的值。
+**影響**：bot 在哪個群就在哪個群回話，含未來新加的群組，無需每次加群都改設定+重啟。
+當此旗標為真時，`LINE_GROUP_QA_ALLOWLIST` 不需要設定（可留空或不填）。
 
 ### 1.4 設定 LINE_INGESTION_FORWARD_URL
 
@@ -578,7 +582,7 @@ docker compose stop
       - LINE_PORT=8646
       - LINE_PUBLIC_URL=https://ai.murray.tw
       - LINE_BOT_USER_ID=Uf60a97fd41e8fb5264f4db0d9adecb17
-      - LINE_GROUP_QA_ALLOWLIST=C16015a313fd45352dc63fdb63a1f45de
+      - LINE_GROUP_QA_ALLOW_ALL=true
       - LINE_INGESTION_FORWARD_URL=http://172.22.0.1:8092/internal/line-events
       - LINE_INGESTION_INTERNAL_SECRET=${LINE_INGESTION_INTERNAL_SECRET:?set in .env}
       - ADMIN_DB_PATH=/home/murray/ai-data/admin-panel/admin.db

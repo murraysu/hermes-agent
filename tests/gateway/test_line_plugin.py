@@ -265,6 +265,63 @@ class TestGroupForwardAndMentionGate:
         assert _line_mentions_self(event)
         assert _strip_self_mention(event) == "前面  後面"
 
+    def test_group_qa_allow_all_lets_non_allowlisted_group_trigger(self, adapter, monkeypatch):
+        """ALLOW_ALL=true: a group NOT in the allowlist that @mentions the bot
+        must still trigger handle_message."""
+        forward = AsyncMock(return_value=True)
+        monkeypatch.setattr(_line, "_forward_line_ingestion_event", forward)
+        adapter.group_qa_allow_all = True
+
+        event = self._event(chat_id="Cbrand-new-group", mention=True, text="@bot 幫我摘要")
+
+        async def dispatch():
+            await adapter._dispatch_event(event, destination="Udestination")
+            await asyncio.sleep(0)
+
+        asyncio.run(dispatch())
+
+        forward.assert_awaited_once_with(event, "Udestination")
+        adapter.handle_message.assert_awaited_once()
+        message_event = adapter.handle_message.await_args.args[0]
+        assert message_event.text == "幫我摘要"
+        assert message_event.source.chat_id == "Cbrand-new-group"
+
+    def test_group_qa_allow_all_still_requires_mention(self, adapter, monkeypatch):
+        """ALLOW_ALL=true: a group NOT in the allowlist that does NOT @mention
+        the bot must only be forwarded, never sent to the agent."""
+        forward = AsyncMock(return_value=True)
+        monkeypatch.setattr(_line, "_forward_line_ingestion_event", forward)
+        adapter.group_qa_allow_all = True
+
+        event = self._event(chat_id="Cbrand-new-group", mention=False, text="大家好")
+
+        async def dispatch():
+            await adapter._dispatch_event(event, destination="Udestination")
+            await asyncio.sleep(0)
+
+        asyncio.run(dispatch())
+
+        forward.assert_awaited_once_with(event, "Udestination")
+        adapter.handle_message.assert_not_awaited()
+
+    def test_group_qa_allow_all_false_preserves_existing_behavior(self, adapter, monkeypatch):
+        """ALLOW_ALL unset (default): a group NOT in the allowlist that @mentions
+        the bot is forwarded but NOT sent to the agent — same as before."""
+        forward = AsyncMock(return_value=True)
+        monkeypatch.setattr(_line, "_forward_line_ingestion_event", forward)
+        adapter.group_qa_allow_all = False
+
+        event = self._event(chat_id="Cblocked", mention=True, text="@bot secret")
+
+        async def dispatch():
+            await adapter._dispatch_event(event)
+            await asyncio.sleep(0)
+
+        asyncio.run(dispatch())
+
+        forward.assert_awaited_once_with(event, "")
+        adapter.handle_message.assert_not_awaited()
+
 
 # ---------------------------------------------------------------------------
 # 4. Inbound dedup

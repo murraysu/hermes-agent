@@ -112,6 +112,45 @@ task 集合追蹤，因此 webhook 可以快速回 200，gateway shutdown 時也
 - `python3 -m py_compile`：通過。
 - `ruff check plugins/platforms/line/adapter.py tests/gateway/test_line_plugin.py`：通過。
 
+### 群組身分閘門：與 channel_gw 的刻意行為差異
+
+**這是一個刻意的設計決定，不是疏漏。**
+
+channel_gw 的 `_handle_line_group_mention()`（`~/ai-stack/code/home_gateway/channel_gw/main.py:1257-1260`）
+只回答**已綁定員工** — 未綁定的 LINE user_id 在群組中 @bot 時會被靜默忽略，
+不會觸發任何 AI 回應。
+
+hermes-agent 原生 LINE plugin 的身分閘門（`_handle_identity_gate()`）**只套用在
+1:1 (DM) 訊息**（`adapter.py:1133` `if chat_type == "dm"`）。群組內任何人 —
+包括未綁定的外部客戶、廠商、或非員工 — 都可以 @bot 觸發回答。
+
+**Murray 於 2026-08-01 明確決定：維持原生版行為，群組裡任何人都可以問。**
+因此**不要**加身分閘門到群組路徑，程式碼不用改動。
+
+#### 影響
+
+- bot 在群組裡對非員工也會載入公司人格與工具（透過 `pre_llm_call` hook
+  讀取 employee_id → soul/skill）。對非員工來說，soul/skill hook 會因
+  找不到綁定而安全降級（返回 `None`，不注入 context），但仍會使用預設
+  system prompt + 可用的工具。
+- 若未來群組含有外部人員且不希望他們觸發公司人格/工具，需重新評估此決定，
+  或改為 `LINE_GROUP_QA_ALLOW_ALL=false` + 手動維護 `LINE_GROUP_QA_ALLOWLIST`，
+  並考慮在群組路徑加入身分閘門。
+
+#### LINE_GROUP_QA_ALLOW_ALL 旗標
+
+為了讓 bot「在哪個群就在哪個群回話，含未來新加的群組」，Murray 決定啟用
+`LINE_GROUP_QA_ALLOW_ALL=true`。此旗標：
+
+- 使用 `_truthy_env()` 讀取（與 `LINE_ALLOW_ALL_USERS` 同一個模式）。
+- 為真時：**跳過允許清單的成員檢查**，任何群組都可以觸發回答。
+- **@mention 的要求絕對不能一起放寬** — 這是唯一阻止 bot 對群組每則訊息都
+  插嘴的機制。必須仍然只有被 @ 標註時才回應。
+- 為假（預設）時：維持現在的允許清單行為，行為不變。
+
+當 `LINE_GROUP_QA_ALLOW_ALL=true` 時，`LINE_GROUP_QA_ALLOWLIST` 不需要設定
+（但仍可留空或不設定）。
+
 ---
 
 ## 第三節：多媒體處理查證 (feature/line-media)

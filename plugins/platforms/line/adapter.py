@@ -23,7 +23,9 @@ button and always Push-fallback instead.
 
 **Three-allowlist gating.** Separate allowlists for users (U-prefixed),
 groups (C-prefixed), and rooms (R-prefixed). ``LINE_ALLOW_ALL_USERS=true``
-is a dev-only escape hatch.
+is a dev-only escape hatch.  ``LINE_GROUP_QA_ALLOW_ALL=true`` bypasses the
+group/room QA allowlist (any group that @mentions the bot gets a reply)
+without relaxing the @mention requirement.
 
 **Media via public HTTPS.** LINE's Messaging API does *not* accept
 binary uploads — images, audio, and video must be reachable HTTPS URLs.
@@ -809,6 +811,10 @@ class LineAdapter(BasePlatformAdapter):
         self.allow_all = _truthy_env(
             "LINE_ALLOW_ALL_USERS", bool(extra.get("allow_all_users", False))
         )
+        # Group QA allow-all: when true, any group/room that @mentions the bot
+        # triggers a reply, regardless of LINE_GROUP_QA_ALLOWLIST.  The @mention
+        # requirement is never relaxed — this only bypasses the allowlist.
+        self.group_qa_allow_all = _truthy_env("LINE_GROUP_QA_ALLOW_ALL", False)
         self.allowed_users = _csv_set(
             os.getenv("LINE_ALLOWED_USERS", "")
         ) | set(extra.get("allowed_users", []))
@@ -1073,16 +1079,19 @@ class LineAdapter(BasePlatformAdapter):
             return
 
         # Group/room events only reach the assistant when a text message
-        # explicitly mentions this bot and the chat is in the F4 QA allowlist.
-        # This gate replaces the general LINE_ALLOWED_GROUPS/ROOMS gate for
-        # group conversations; ingestion above always remains active.
+        # explicitly mentions this bot and the chat is in the F4 QA allowlist
+        # (or LINE_GROUP_QA_ALLOW_ALL is set).  The @mention requirement is
+        # never bypassed — it is the only thing that prevents the bot from
+        # replying to every group message.  This gate replaces the general
+        # LINE_ALLOWED_GROUPS/ROOMS gate for group conversations; ingestion
+        # above always remains active.
         if source_type in {"group", "room"}:
             message = event.get("message") or {}
             chat_id, _ = _resolve_chat(source)
             if (
                 event_type != "message"
                 or message.get("type") != "text"
-                or chat_id not in LINE_GROUP_QA_ALLOWLIST
+                or (not self.group_qa_allow_all and chat_id not in LINE_GROUP_QA_ALLOWLIST)
                 or not _line_mentions_self(event, self._bot_user_id or "")
             ):
                 return

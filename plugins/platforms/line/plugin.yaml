@@ -55,6 +55,10 @@ optional_env:
     description: "Allow any LINE user to talk to the bot (dev only — disables allowlist)"
     prompt: "Allow all users? (true/false)"
     password: false
+  - name: LINE_GROUP_QA_ALLOW_ALL
+    description: "Allow any group/room that @mentions the bot to trigger a reply, bypassing LINE_GROUP_QA_ALLOWLIST. The @mention requirement is never relaxed. (production: Murray's decision 2026-08-01)"
+    prompt: "Allow all groups to QA? (true/false)"
+    password: false
   - name: LINE_HOME_CHANNEL
     description: "Default user/group/room ID for cron / notification delivery"
     prompt: "Home channel ID (or empty)"

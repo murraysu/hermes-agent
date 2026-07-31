@@ -39,8 +39,13 @@ from plugins.platforms.line.cron_delivery import (
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def tmp_db(tmp_path):
-    """Create a temp line_ingestion SQLite DB with schema + sample data."""
+def tmp_db(tmp_path, frozen_now):
+    """Create a temp line_ingestion SQLite DB with schema + sample data.
+
+    Uses ``frozen_now`` for all timestamps so that date-filtered queries
+    (which depend on the system timezone via ``astimezone()``) find the
+    sample events deterministically regardless of the host TZ.
+    """
 
     db_path = tmp_path / "line_ingestion.sqlite3"
     conn = sqlite3.connect(str(db_path))
@@ -87,8 +92,9 @@ def tmp_db(tmp_path):
         """
     )
 
-    # Insert sample raw messages for 3 groups.
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    # Insert sample raw messages for 3 groups.  All timestamps are anchored
+    # to ``frozen_now`` so date-filtered queries find them regardless of host TZ.
+    now_ms = int(frozen_now.timestamp() * 1000)
     sample_messages = [
         ("Cgroup1", "Uuser1", "msg1", now_ms - 3600000, "Project kickoff scheduled"),
         ("Cgroup1", "Uuser2", "msg2", now_ms - 1800000, "Budget approved"),

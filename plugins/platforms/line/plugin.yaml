@@ -64,7 +64,7 @@ optional_env:
     prompt: "Slow response threshold (seconds)"
     password: false
   - name: ADMIN_DB_PATH
-    description: "Path to the shared admin.db SQLite database (read-only for identity resolution). Default: ~/services/admin_panel/admin.db"
+    description: "Path to the shared admin.db SQLite database (read-only for identity resolution). Default: ~/ai-data/admin-panel/admin.db"
     prompt: "Admin DB path"
     password: false
   - name: ADMIN_PANEL_URL

@@ -1152,17 +1152,17 @@ class LineAdapter(BasePlatformAdapter):
             if msg_type == "file":
                 is_supported, reject_msg = check_file_extension(filename)
                 if not is_supported:
-                    text = reject_msg
-                else:
-                    local_path, media_type = await self._download_media(
-                        message_id,
-                        msg_type,
-                        filename=filename,
-                    )
-                    if local_path:
-                        media_urls.append(local_path)
-                        media_types.append(media_type)
-                    text = f"[{msg_type}]"
+                    await self._send_text_chunks(chat_id, reject_msg, force_push=False)
+                    return
+                local_path, media_type = await self._download_media(
+                    message_id,
+                    msg_type,
+                    filename=filename,
+                )
+                if local_path:
+                    media_urls.append(local_path)
+                    media_types.append(media_type)
+                text = f"[{msg_type}]"
             else:
                 local_path, media_type = await self._download_media(
                     message_id,

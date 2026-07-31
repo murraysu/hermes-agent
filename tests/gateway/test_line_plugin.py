@@ -739,6 +739,9 @@ class TestFileExtensionFiltering:
         ad = LineAdapter(cfg)
         ad._client = MagicMock()
         ad._client.fetch_content = AsyncMock(return_value=b"line-bytes")
+        ad._client.reply = AsyncMock()
+        ad._client.push = AsyncMock()
+        ad._send_text_chunks = AsyncMock(return_value=_line.SendResult(success=True))
         ad.handle_message = AsyncMock()
         return ad
 
@@ -750,30 +753,33 @@ class TestFileExtensionFiltering:
             "message": {"type": "file", "id": "file-1", "fileName": filename},
         }
 
-    def _captured_event(self, adapter):
-        adapter.handle_message.assert_awaited_once()
-        return adapter.handle_message.await_args.args[0]
-
     def test_supported_file_downloaded_and_queued(self, adapter):
         with patch.object(_line, "cache_document_from_bytes", return_value="/cache/doc.pdf") as cache:
             asyncio.run(adapter._handle_message_event(self._file_event("doc.pdf")))
         cache.assert_called_once()
-        event = self._captured_event(adapter)
+        adapter.handle_message.assert_awaited_once()
+        event = adapter.handle_message.await_args.args[0]
         assert event.media_urls == ["/cache/doc.pdf"]
         assert event.message_type is _line.MessageType.DOCUMENT
 
-    def test_unsupported_file_not_downloaded(self, adapter):
+    def test_unsupported_file_rejected_via_direct_reply_not_llm(self, adapter):
+        """Unsupported file extensions must be rejected with a direct reply,
+        NOT forwarded to handle_message (which would send them to the LLM)."""
         with patch.object(_line, "cache_document_from_bytes") as cache:
             asyncio.run(adapter._handle_message_event(self._file_event("malware.exe")))
         cache.assert_not_called()
-        event = self._captured_event(adapter)
-        assert event.media_urls == []
-        assert "不支援" in event.text
-        assert "exe" in event.text
+        adapter._send_text_chunks.assert_awaited_once()
+        sent_args = adapter._send_text_chunks.await_args
+        sent_chat_id, sent_text = sent_args.args
+        sent_force = sent_args.kwargs.get("force_push")
+        assert sent_chat_id == "Cline"
+        assert "不支援" in sent_text
+        assert "exe" in sent_text
+        assert sent_force is False
+        adapter.handle_message.assert_not_awaited()
 
-    def test_unsupported_file_no_media_urls(self, adapter):
+    def test_unsupported_file_no_media_urls_no_llm(self, adapter):
+        """No media URLs should be set and the LLM must never see the message."""
         asyncio.run(adapter._handle_message_event(self._file_event("script.sh")))
-        event = self._captured_event(adapter)
-        assert event.media_urls == []
-        assert event.media_types == []
-        assert "不支援" in event.text
+        adapter._send_text_chunks.assert_awaited_once()
+        adapter.handle_message.assert_not_awaited()

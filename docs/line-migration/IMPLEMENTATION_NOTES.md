@@ -303,6 +303,66 @@ standalone_sender_fn=_standalone_send,
 
 ---
 
+## 部署需求 (Deployment Requirements)
+
+hermes-agent 容器要能正確運作 LINE 身分綁定，**必須**滿足以下兩項部署條件。
+這是驗收時發現的部署缺口，未來部署新環境時務必確認。
+
+### 1. 挂载 admin.db (唯讀)
+
+容器必須將 admin.db 以**唯讀**方式掛载進容器內。hermes-agent 的 LINE plugin
+(`plugins/platforms/line/identity.py`) 會讀取 admin.db 中的 `pipeline_config`
+表格來解析 LINE user_id → employee_id 的綁定關係。
+
+- **主機路徑**：`/home/murray/ai-data/admin-panel/admin.db`
+  （此為 admin_panel 服務收編到 ai-stack 後的實際路徑；舊路徑
+  `~/services/admin_panel/admin.db` 已不再存在）。
+- **容器掛載點**：建議掛載到容器內的相同路徑，或透過 `ADMIN_DB_PATH`
+  環境變數指定。
+- **掛載選項**：**唯讀** (`ro`)。hermes-agent 絕不直接寫入 admin.db；
+  所有綁定寫入都透過 Admin Panel 的 `POST /api/bind` API 完成。
+
+Docker compose 範例：
+
+```yaml
+services:
+  hermes-agent:
+    volumes:
+      - /home/murray/ai-data/admin-panel/admin.db:/home/murray/ai-data/admin-panel/admin.db:ro
+    environment:
+      - ADMIN_DB_PATH=/home/murray/ai-data/admin-panel/admin.db
+```
+
+### 2. 設定 ADMIN_DB_PATH
+
+容器內的 `ADMIN_DB_PATH` 環境變數**必須**指向掛載進容器的 admin.db 路徑。
+`identity.py` 的 `DEFAULT_ADMIN_DB` 預設為 `~/ai-data/admin-panel/admin.db`，
+但容器內的 `~` 可能與主機不同，因此**必須**明確設定 `ADMIN_DB_PATH` 而非
+依賴預設值。
+
+- 若 `ADMIN_DB_PATH` 未設定且預設路徑在容器內不存在，plugin 會發出
+  `WARNING` 級別日誌（而非 `DEBUG`），並且**所有使用者都會被判定為未綁定**
+  → 全部卡在「請輸入暱稱」 → bot 對誰都不回話。
+- 這種情況必須能夠被觀測到，因此日誌等級特意設為 `WARNING`。
+
+### 驗證方法
+
+部署後執行：
+
+```bash
+docker exec hermes-agent-lq ls -la /home/murray/ai-data/admin-panel/admin.db
+docker exec hermes-agent-lq python -c "
+from plugins.platforms.line.identity import IdentityResolver
+r = IdentityResolver()
+print('admin_db:', r._admin_db)
+print('exists:', r._admin_db.exists())
+"
+```
+
+確認 `exists: True` 且無 `WARNING` 日誌。
+
+---
+
 ## 合併歷史
 
 | 順序 | 分支 | 衝突 | 處理 |

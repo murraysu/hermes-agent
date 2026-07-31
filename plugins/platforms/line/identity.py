@@ -32,8 +32,14 @@ logger = logging.getLogger(__name__)
 
 # ── Defaults (mirror channel_gw/identity.py) ──────────────────────────
 
+# The old default ~/services/admin_panel/admin.db is the legacy path from when
+# admin_panel ran as a standalone service under ~/services/. That service has
+# since been absorbed into the ai-stack monorepo (~/ai-stack/code/<svc>), and
+# the real admin.db now lives at ~/ai-data/admin-panel/admin.db. Using the
+# stale path would silently break identity resolution for every user.
+# ADMIN_DB_PATH env var can still override for custom deployments.
 DEFAULT_ADMIN_DB = Path(
-    os.getenv("ADMIN_DB_PATH", str(Path.home() / "services" / "admin_panel" / "admin.db"))
+    os.getenv("ADMIN_DB_PATH", str(Path.home() / "ai-data" / "admin-panel" / "admin.db"))
 )
 DEFAULT_ADMIN_PANEL_URL = os.getenv("ADMIN_PANEL_URL", "http://host.docker.internal:8888")
 
@@ -111,9 +117,12 @@ class IdentityResolver:
             return
 
         if not self._admin_db.exists():
-            logger.debug(
+            logger.warning(
                 "LINE identity: admin.db not found at %s — "
-                "identity resolution will fail (binding prompt will be shown)",
+                "identity resolution will fail and all users will be treated "
+                "as unbound (every 1:1 message will be intercepted by the "
+                "binding prompt). Set ADMIN_DB_PATH to the correct location "
+                "and mount admin.db into the container (read-only).",
                 self._admin_db,
             )
             return

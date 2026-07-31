@@ -83,11 +83,46 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      # LINE platform plugin (小助理 OA) — since 2026-08-01 this is the
+      # production LINE path; nginx routes /webhook/line here and channel_gw
+      # no longer serves LINE. Port 8646 is deliberately NOT published to the
+      # host: nginx reaches it over the docker bridge as hermes-agent-sm121:8646.
+      - LINE_CHANNEL_ACCESS_TOKEN=${LINE_CHANNEL_ACCESS_TOKEN:-}
+      - LINE_CHANNEL_SECRET=${LINE_CHANNEL_SECRET:-}
+      - LINE_PORT=8646
+      - LINE_PUBLIC_URL=https://ai.murray.tw
+      # The gateway has its own authorization layer (_is_user_authorized) that
+      # default-denies, and it runs BEFORE the plugin's gates. Authorization
+      # for LINE is deliberately delegated to the plugin instead: DMs are gated
+      # by the identity binding gate below, groups by @mention. Without this
+      # flag the gateway rejects every sender ("Unauthorized user ... on line")
+      # and the bot answers nobody — caught in production smoke test 2026-08-01.
+      - LINE_ALLOW_ALL_USERS=true
+      # Identity binding gate reads admin.db read-only and writes new bindings
+      # through the Admin Panel API. Without ADMIN_DB_PATH every user is
+      # treated as unbound and the bot answers nobody (logged at WARNING).
+      - ADMIN_DB_PATH=/home/murray/ai-data/admin-panel/admin.db
+      # localhost inside the container is the container itself, so the Admin
+      # Panel has to be addressed over the docker bridge gateway.
+      - ADMIN_PANEL_URL=http://172.22.0.1:8888
+      # Group/room events are always forwarded to line_ingestion (F1-F6
+      # summary + event extraction), independently of whether the agent replies.
+      - LINE_INGESTION_FORWARD_URL=${LINE_INGESTION_FORWARD_URL:-}
+      - LINE_INGESTION_INTERNAL_SECRET=${LINE_INGESTION_INTERNAL_SECRET:-}
+      # Fallback for @mention detection when the LINE bot-info API call fails.
+      - LINE_BOT_USER_ID=${LINE_BOT_USER_ID:-}
+      # Murray, 2026-08-01: the bot answers in every group it is in, so new
+      # groups need no config change. The @mention requirement is NOT relaxed
+      # by this flag — it is the only thing keeping the bot from replying to
+      # every group message.
+      - LINE_GROUP_QA_ALLOW_ALL=true
     volumes:
       # Persist Hermes data (sessions, logs, skills, configs)
       - hermes-data:/opt/data
       # Mount Enterprise Skills into Hermes
       - /home/murray/enterprise-skills:/opt/data/skills/enterprise:ro
+      # Identity map for LINE user -> employee resolution (read-only).
+      - /home/murray/ai-data/admin-panel/admin.db:/home/murray/ai-data/admin-panel/admin.db:ro
       # Docker socket for sandbox environments
       - /var/run/docker.sock:/var/run/docker.sock:ro
     command: ["gateway", "run", "--accept-hooks"]

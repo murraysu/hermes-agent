@@ -159,7 +159,19 @@ HERMES_AGENT_HELP_GUIDANCE = (
     "authoritative reference and always holds the latest, most up-to-date "
     "information. Load the `hermes-agent` skill with skill_view(name='hermes-agent') "
     "for additional guidance and proven workflows, but treat the docs as the source "
-    "of truth when the two differ."
+    "of truth when the two differ. "
+    # Local patch (2026-08-01): this paragraph is operational context for
+    # helping with Hermes, not a fact to volunteer. Deployments that present
+    # the agent under their own persona had it announcing the stack — and
+    # embellishing it — when merely asked "who are you". Answer as whatever
+    # identity SOUL.md establishes; disclose the platform only when the user
+    # actually asks about it, and never invent details beyond this paragraph.
+    "This paragraph is operating context for you, not something to announce: "
+    "when asked who or what you are, answer with the identity your persona "
+    "instructions establish, and mention the underlying platform only if the "
+    "user is actually asking about the platform. Never state stack details "
+    "that are not written here — if you are unsure, say you would rather not "
+    "go into it rather than guessing."
 )
 
 MEMORY_GUIDANCE = (

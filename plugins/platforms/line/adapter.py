@@ -103,7 +103,6 @@ from gateway.platforms.base import (
 from gateway.config import Platform
 
 from plugins.platforms.line.identity import IdentityResolver, BindStateStore
-from plugins.platforms.line.personalization import pre_llm_call_hook
 from plugins.platforms.line.media import (
     check_file_extension,
     is_supported_file_type,
@@ -872,6 +871,19 @@ class LineAdapter(BasePlatformAdapter):
         # button per chat at a time. Postback cache request_id keyed by chat_id.
         self._pending_buttons: Dict[str, str] = {}
 
+        # Group follow-up window: when enabled, a user who @mentions the bot
+        # in a group opens a per-(chat_id, user_id) window during which their
+        # subsequent non-@mentioned messages are treated as conversation
+        # continuations.  Per-user isolation — never per group.
+        # 0 = disabled (back to "always need @").
+        try:
+            self.followup_window_seconds = int(
+                os.getenv("LINE_GROUP_FOLLOWUP_WINDOW_SECONDS", "600")
+            )
+        except (TypeError, ValueError):
+            self.followup_window_seconds = 600
+        self._followup_windows: Dict[Tuple[str, str], float] = {}
+
         # Identity binding gate (sub-task 2 of LINE migration spec).
         # Resolves LINE user_id → employee_id via admin.db (read-only)
         # and writes new bindings through the Admin Panel /api/bind API.
@@ -1085,20 +1097,44 @@ class LineAdapter(BasePlatformAdapter):
         # replying to every group message.  This gate replaces the general
         # LINE_ALLOWED_GROUPS/ROOMS gate for group conversations; ingestion
         # above always remains active.
+        #
+        # Group follow-up window: when enabled (LINE_GROUP_FOLLOWUP_WINDOW_SECONDS
+        # > 0), a user who @mentions the bot opens a per-(chat_id, user_id) window
+        # during which their subsequent non-@mentioned text messages are treated
+        # as conversation continuations.  The window is per-user — a different
+        # user in the same group cannot piggyback on another user's window.
+        # Each dispatch (mention or follow-up) resets the window so multi-turn
+        # conversations can keep going.  0 = disabled (back to "always need @").
         if source_type in {"group", "room"}:
             message = event.get("message") or {}
             chat_id, _ = _resolve_chat(source)
-            if (
-                event_type != "message"
-                or message.get("type") != "text"
-                or (not self.group_qa_allow_all and chat_id not in LINE_GROUP_QA_ALLOWLIST)
-                or not _line_mentions_self(event, self._bot_user_id or "")
-            ):
+            user_id = source.get("userId", "")
+
+            # Layer 1: Allowlist — only allowed groups can ever trigger the bot.
+            # LINE_GROUP_QA_ALLOW_ALL bypasses the member check but never
+            # relaxes the @mention requirement.
+            if not self.group_qa_allow_all and chat_id not in LINE_GROUP_QA_ALLOWLIST:
                 return
-            text = _strip_self_mention(event, self._bot_user_id or "")
-            if not text:
+
+            # Layer 2: Only text messages are eligible.
+            if event_type != "message" or message.get("type") != "text":
                 return
-            event = {**event, "message": {**message, "text": text}}
+
+            # Layer 3: Either a self-mention (opens/resets the follow-up window)
+            # or an active follow-up window for this (chat_id, user_id) lets
+            # the message through.
+            if _line_mentions_self(event, self._bot_user_id or ""):
+                text = _strip_self_mention(event, self._bot_user_id or "")
+                if not text:
+                    return
+                self._open_followup_window(chat_id, user_id)
+                event = {**event, "message": {**message, "text": text}}
+            elif self._check_followup_window(chat_id, user_id):
+                # Active follow-up: treat as conversation continuation.
+                # Reset the window so multi-turn conversations can keep going.
+                self._open_followup_window(chat_id, user_id)
+            else:
+                return
 
         # Allowlist gate.
         if source_type not in {"group", "room"} and not _allowed_for_source(
@@ -1457,6 +1493,42 @@ class LineAdapter(BasePlatformAdapter):
         if not token or time.time() >= expires_at:
             return "", False
         return token, True
+
+    # ------------------------------------------------------------------
+    # Group follow-up window
+    # ------------------------------------------------------------------
+
+    def _open_followup_window(self, chat_id: str, user_id: str) -> None:
+        """Open or reset the follow-up window for ``(chat_id, user_id)``.
+
+        Called when a group message with a self-mention is dispatched to
+        the agent.  Subsequent non-@mentioned messages from the same user
+        in the same group within the window are treated as continuations.
+        Per-user isolation — a different user in the same group cannot
+        piggyback on another user's window.
+        """
+        if self.followup_window_seconds <= 0:
+            return
+        self._prune_followup_windows()
+        self._followup_windows[(chat_id, user_id)] = (
+            time.time() + self.followup_window_seconds
+        )
+
+    def _check_followup_window(self, chat_id: str, user_id: str) -> bool:
+        """Return True if an active follow-up window exists for this user."""
+        if self.followup_window_seconds <= 0:
+            return False
+        self._prune_followup_windows()
+        expiry = self._followup_windows.get((chat_id, user_id))
+        if expiry is None:
+            return False
+        return time.time() < expiry
+
+    def _prune_followup_windows(self) -> None:
+        """Remove expired follow-up window entries."""
+        now = time.time()
+        for key in [k for k, v in self._followup_windows.items() if now >= v]:
+            self._followup_windows.pop(key, None)
 
     async def send_typing(self, chat_id: str, metadata=None) -> None:
         """Trigger LINE's loading-animation indicator (DM only)."""
@@ -1965,7 +2037,7 @@ def register(ctx) -> None:
         emoji="💚",
         pii_safe=False,
         allow_update_command=True,
-        platform_hint=(
+         platform_hint=(
             "You are chatting via LINE Messaging API. LINE does NOT render "
             "Markdown — text bubbles show ** and # literally. Bare URLs are "
             "auto-linked, but \\[label\\](url) syntax is not. Each text bubble "
@@ -1976,7 +2048,3 @@ def register(ctx) -> None:
             "to fetch the reply via a fresh free token."
         ),
     )
-
-    # Soul/skill personalization: inject employee persona + skills into the
-    # pre_llm_call hook context.  See personalization.py for the full design.
-    ctx.register_hook("pre_llm_call", pre_llm_call_hook)

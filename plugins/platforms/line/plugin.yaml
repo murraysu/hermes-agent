@@ -79,5 +79,3 @@ optional_env:
     description: "Admin Panel base URL for the /api/bind endpoint (identity binding). Default: http://host.docker.internal:8888"
     prompt: "Admin Panel URL"
     password: false
-hooks:
-  - pre_llm_call

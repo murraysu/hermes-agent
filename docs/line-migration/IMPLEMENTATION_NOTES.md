@@ -218,32 +218,64 @@ hermes-agent 原生 LINE plugin 的身分閘門（`_handle_identity_gate()`）**
 
 ---
 
-## 第四節：Soul/Skill 個人化 Hook (feature/line-soul-skill)
+## 第四節：Soul/Skill 個人化 Hook (feature/line-soul-skill) — 已移除
 
-### 實作內容
+> **狀態**：2026-08-01 移除
 
-`plugins/platforms/line/personalization.py` (new) — 實作 `pre_llm_call` hook，
-在 LINE user_id 解析為 employee_id 後，從 admin.db 讀取該員工的 soul
-（部門 persona）與 skill（部門/個人技能設定），動態疊加進 system prompt。
+### 移除原因
 
-**設計要點**：
+1. **定位轉為個人助理**。Murray 於 2026-08-01 明確表示此系統已與組織（公司）
+   無關，皆以個人為主要用戶。原為「多員工企業助理」設計的個人化層
+   （部門 persona + 技能設定）成為死重量，應予移除。
 
-- **Hook，而非 core edit**：Soul/skill 透過 hermes-agent 的 `pre_llm_call` plugin
-  hook 注入，hook 回傳 `{"context": "..."}`。Hermes 將其注入到 *user message*
-  中（絕不修改 system prompt），以保持 prompt-cache 穩定性。
-- **平台作用域**：Hook callback 註冊在 plugin manager 上，但在
-  `platform != "line"` 時立即 short-circuit — 其他平台零成本。
-- **快取**：IdentityResolver (identity_map) 與 soul/skill 資料均使用 60 秒 TTL
-  快取。
-- **安全降級**：所有失敗路徑返回 `None`（不注入 context），而非拋出例外。
-  缺少 admin.db、未綁定用戶或暫時性 DB 錯誤絕不中斷對話。
+2. **重複注入造成身份混淆的 bug**。`personalization.py` 的 `pre_llm_call_hook`
+   從 `admin.db` 撐 `system_settings.base_soul` 注入到 **user message**。
+   但同一份 `base_soul` 文字早已由 `/opt/data/SOUL.md` 載入為
+   **system prompt**（md5 比對確認位元組相同：
+   `fcd715e1d7024f59a4c11dc2a261c445`）。重複注入導致模型把 bot 自己的名字
+   「知到」當成被服務的對象，生產對話出現「我將為您『知到』安排一場會議…」
+   的錯誤。移除個人化層後，此 bug 從根本消失。
 
-在 `adapter.py` 的 `register()` 函數中註冊：
-```python
-ctx.register_hook("pre_llm_call", pre_llm_call_hook)
-```
+### 移除內容
 
-並在 `plugin.yaml` 宣告 `hooks: [pre_llm_call]`。
+- 刪除 `plugins/platforms/line/personalization.py` 及其所有內容。
+- 移除 `adapter.py` `register()` 中的 `ctx.register_hook("pre_llm_call", pre_llm_call_hook)`。
+- 移除 `adapter.py` 中的 `from plugins.platforms.line.personalization import pre_llm_call_hook`。
+- 移除 `plugin.yaml` 中的 `hooks: [pre_llm_call]`。
+
+### admin.db `base_soul` 資料不動
+
+`admin.db` 的 `system_settings.base_soul` 欄位**不予刪除** —
+`web_portal` (`services/soul.py`)、`admin_panel`、`channel_gw` 仍在讀取它。
+我們只是不再從 LINE plugin 這邊注入而已。
+
+### 群組 AI 揭遲刻意不實作
+
+ADR-0003「透明可定址的組織協作者」所規劃的 channel_gw 群組 AI 揭露
+（在群組訊息回覆中顯示 bot 身份），**Murray 已明確表示完全不需要** —
+該需求隨企業定位作廢。**不要**補回任何揭露文字。
+
+---
+
+## 群組追問視窗 (Group Follow-up Window)
+
+> **狀態**：2026-08-01 實作完成，保留
+
+由環境變數 `LINE_GROUP_FOLLOWUP_WINDOW_SECONDS` 控制，預設 600 秒。
+
+- 當群組使用者 @mention bot 時，開啟 per `(chat_id, user_id)` 的視窗。
+- 視窗內該使用者的後續非 @mentioned 訊息會被當作對話延續派工。
+- **per-user 隔離**：同群組內的其他人即使 A 的視窗還開著也**絕對不能**觸發回話。
+- 每次派工（@mention 或 follow-up）都會重新計時，多輪對話可以一直延續。
+- 設為 0 則停用，退回「每次都要 @」的舊行為。
+- 視窗狀態存放在 adapter 的 in-memory dict (`_followup_windows`)，
+  過期項目透過 `_prune_followup_windows()` 清理。
+
+### 測試
+
+`tests/gateway/test_line_plugin.py` 中的 `TestGroupFollowupWindow` 類別
+包含 11 個單元測試，覆蓋視窗開啟、過期、不同使用者隔離、重置計時、
+停用行為、 ingestion 轉發保證等。
 
 ---
 
@@ -352,7 +384,7 @@ standalone_sender_fn=_standalone_send,
 | 追問視窗設為 0 時退回舊行為 | `followup_window_seconds <= 0` 時 `_open_followup_window` / `_check_followup_window` 提前返回 | ✅ |
 | 未綁定員工的 1:1 訊息絕不進 LLM | `_handle_message_event` 步驟 3 (before media download) | ✅ |
 | 不在白名單的副檔名在下載之前擋掉 | `_handle_message_event` 步驟 4 (file 檢查在 `_download_media` 之前) | ✅ |
-| soul/skill pre_llm_call hook 註冊存活 | `register()` 中的 `ctx.register_hook("pre_llm_call", ...)` | ✅ |
+| soul/skill pre_llm_call hook 已移除 | personalization.py 刪除，register() 不再註冊 hook，plugin.yaml 不再宣告 hooks | ✅ |
 
 ---
 

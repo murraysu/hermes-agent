@@ -103,7 +103,6 @@ from gateway.platforms.base import (
 from gateway.config import Platform
 
 from plugins.platforms.line.identity import IdentityResolver, BindStateStore
-from plugins.platforms.line.personalization import pre_llm_call_hook
 from plugins.platforms.line.media import (
     check_file_extension,
     is_supported_file_type,
@@ -2038,7 +2037,7 @@ def register(ctx) -> None:
         emoji="💚",
         pii_safe=False,
         allow_update_command=True,
-        platform_hint=(
+         platform_hint=(
             "You are chatting via LINE Messaging API. LINE does NOT render "
             "Markdown — text bubbles show ** and # literally. Bare URLs are "
             "auto-linked, but \\[label\\](url) syntax is not. Each text bubble "
@@ -2049,7 +2048,3 @@ def register(ctx) -> None:
             "to fetch the reply via a fresh free token."
         ),
     )
-
-    # Soul/skill personalization: inject employee persona + skills into the
-    # pre_llm_call hook context.  See personalization.py for the full design.
-    ctx.register_hook("pre_llm_call", pre_llm_call_hook)

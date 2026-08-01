@@ -59,6 +59,10 @@ optional_env:
     description: "Allow any group/room that @mentions the bot to trigger a reply, bypassing LINE_GROUP_QA_ALLOWLIST. The @mention requirement is never relaxed. (production: Murray's decision 2026-08-01)"
     prompt: "Allow all groups to QA? (true/false)"
     password: false
+  - name: LINE_GROUP_FOLLOWUP_WINDOW_SECONDS
+    description: "Group follow-up window in seconds. When a user @mentions the bot in a group, a per-user window opens during which their subsequent non-@mentioned messages are treated as conversation continuations. Per (group_id, user_id). Default 600. Set to 0 to disable (always require @)."
+    prompt: "Follow-up window seconds (0=disabled)"
+    password: false
   - name: LINE_HOME_CHANNEL
     description: "Default user/group/room ID for cron / notification delivery"
     prompt: "Home channel ID (or empty)"

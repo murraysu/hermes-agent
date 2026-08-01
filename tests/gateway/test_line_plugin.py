@@ -20,6 +20,7 @@ import hashlib
 import hmac
 import base64
 import json
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -321,6 +322,236 @@ class TestGroupForwardAndMentionGate:
 
         forward.assert_awaited_once_with(event, "")
         adapter.handle_message.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# 3b. Group follow-up window
+# ---------------------------------------------------------------------------
+
+class TestGroupFollowupWindow:
+    """Tests for the per-(chat_id, user_id) follow-up window.
+
+    When a user @mentions the bot in a group, a time window opens during
+    which their subsequent non-@mentioned messages are treated as
+    conversation continuations.  The window is per-user — a different user
+    in the same group cannot piggyback.  Each dispatch resets the window.
+    0 seconds = disabled (back to "always need @").
+    """
+
+    @pytest.fixture
+    def adapter(self, monkeypatch):
+        monkeypatch.delenv("LINE_CHANNEL_ACCESS_TOKEN", raising=False)
+        monkeypatch.delenv("LINE_CHANNEL_SECRET", raising=False)
+        monkeypatch.delenv("LINE_GROUP_FOLLOWUP_WINDOW_SECONDS", raising=False)
+        monkeypatch.setattr(_line, "LINE_GROUP_QA_ALLOWLIST", {"Cqa"})
+        from gateway.config import PlatformConfig
+
+        cfg = PlatformConfig(enabled=True, extra={
+            "channel_access_token": "tok",
+            "channel_secret": "sec",
+        })
+        ad = LineAdapter(cfg)
+        ad.handle_message = AsyncMock()
+        return ad
+
+    @staticmethod
+    def _event(*, chat_id="Cqa", user_id="Ua", mention=False, text="hello",
+               event_id=None):
+        message = {"id": "msg-1", "type": "text", "text": text}
+        if mention:
+            message["mention"] = {
+                "mentionees": [{"index": 0, "length": 4, "isSelf": True}]
+            }
+        return {
+            "type": "message",
+            "webhookEventId": event_id or f"evt-{chat_id}-{user_id}-{mention}-{text}",
+            "replyToken": "reply-token",
+            "source": {"type": "group", "groupId": chat_id, "userId": user_id},
+            "message": message,
+        }
+
+    @staticmethod
+    def _dispatch_and_wait(adapter, event, destination="Udestination"):
+        async def _run():
+            await adapter._dispatch_event(event, destination=destination)
+            await asyncio.sleep(0)
+        asyncio.run(_run())
+
+    def test_mention_opens_window_then_followup_without_mention_is_dispatched(
+        self, adapter, monkeypatch
+    ):
+        """@mention派工後，同一人同群組沒有 @ 的後續訊息會被派工"""
+        monkeypatch.setattr(_line, "_forward_line_ingestion_event", AsyncMock(return_value=True))
+        adapter.followup_window_seconds = 600
+
+        event1 = self._event(mention=True, text="@bot 請摘要", event_id="evt-1")
+        self._dispatch_and_wait(adapter, event1)
+        assert adapter.handle_message.await_count == 1
+
+        event2 = self._event(mention=False, text="補充參與者", event_id="evt-2")
+        self._dispatch_and_wait(adapter, event2)
+        assert adapter.handle_message.await_count == 2
+
+    def test_window_expiry_blocks_followup_without_mention(
+        self, adapter, monkeypatch
+    ):
+        """視窗過期後，沒有 @ 的訊息不再被派工"""
+        monkeypatch.setattr(_line, "_forward_line_ingestion_event", AsyncMock(return_value=True))
+        adapter.followup_window_seconds = 0.1
+
+        event1 = self._event(mention=True, text="@bot 請摘要", event_id="evt-1")
+        self._dispatch_and_wait(adapter, event1)
+        assert adapter.handle_message.await_count == 1
+
+        time.sleep(0.3)
+
+        event2 = self._event(mention=False, text="補充參與者", event_id="evt-2")
+        self._dispatch_and_wait(adapter, event2)
+        assert adapter.handle_message.await_count == 1
+
+    def test_different_user_in_same_group_not_affected(
+        self, adapter, monkeypatch
+    ):
+        """同群組但不同人的訊息，即使 A 的視窗還開著，B 沒 @ 也不會被派工"""
+        monkeypatch.setattr(_line, "_forward_line_ingestion_event", AsyncMock(return_value=True))
+        adapter.followup_window_seconds = 600
+
+        event1 = self._event(chat_id="Cqa", user_id="Ua", mention=True,
+                             text="@bot 請摘要", event_id="evt-1")
+        self._dispatch_and_wait(adapter, event1)
+        assert adapter.handle_message.await_count == 1
+
+        event2 = self._event(chat_id="Cqa", user_id="Ub", mention=False,
+                             text="大家好", event_id="evt-2")
+        self._dispatch_and_wait(adapter, event2)
+        assert adapter.handle_message.await_count == 1
+
+    def test_window_resets_on_each_mention_dispatch(
+        self, adapter, monkeypatch
+    ):
+        """視窗會隨每次派工重新計時 (via @mention)"""
+        monkeypatch.setattr(_line, "_forward_line_ingestion_event", AsyncMock(return_value=True))
+        adapter.followup_window_seconds = 0.2
+
+        event1 = self._event(mention=True, text="@bot 請摘要", event_id="evt-1")
+        self._dispatch_and_wait(adapter, event1)
+        assert adapter.handle_message.await_count == 1
+
+        time.sleep(0.15)
+
+        event2 = self._event(mention=True, text="@bot 補充", event_id="evt-2")
+        self._dispatch_and_wait(adapter, event2)
+        assert adapter.handle_message.await_count == 2
+
+        time.sleep(0.15)
+
+        event3 = self._event(mention=False, text="補充參與者", event_id="evt-3")
+        self._dispatch_and_wait(adapter, event3)
+        assert adapter.handle_message.await_count == 3
+
+    def test_window_resets_on_followup_dispatch(
+        self, adapter, monkeypatch
+    ):
+        """視窗會隨每次派工重新計時 (via follow-up without @)"""
+        monkeypatch.setattr(_line, "_forward_line_ingestion_event", AsyncMock(return_value=True))
+        adapter.followup_window_seconds = 0.2
+
+        event1 = self._event(mention=True, text="@bot 請摘要", event_id="evt-1")
+        self._dispatch_and_wait(adapter, event1)
+        assert adapter.handle_message.await_count == 1
+
+        time.sleep(0.15)
+
+        event2 = self._event(mention=False, text="補充參與者", event_id="evt-2")
+        self._dispatch_and_wait(adapter, event2)
+        assert adapter.handle_message.await_count == 2
+
+        time.sleep(0.15)
+
+        event3 = self._event(mention=False, text="再補充", event_id="evt-3")
+        self._dispatch_and_wait(adapter, event3)
+        assert adapter.handle_message.await_count == 3
+
+    def test_window_disabled_matches_existing_behavior(
+        self, adapter, monkeypatch
+    ):
+        """LINE_GROUP_FOLLOWUP_WINDOW_SECONDS=0 時行為與現在完全相同"""
+        monkeypatch.setattr(_line, "_forward_line_ingestion_event", AsyncMock(return_value=True))
+        adapter.followup_window_seconds = 0
+
+        event1 = self._event(mention=True, text="@bot 請摘要", event_id="evt-1")
+        self._dispatch_and_wait(adapter, event1)
+        assert adapter.handle_message.await_count == 1
+
+        event2 = self._event(mention=False, text="補充參與者", event_id="evt-2")
+        self._dispatch_and_wait(adapter, event2)
+        assert adapter.handle_message.await_count == 1
+
+    def test_group_event_always_forwarded_to_ingestion(
+        self, adapter, monkeypatch
+    ):
+        """不論視窗開或關，群組事件一律都有轉發 ingestion"""
+        forward = AsyncMock(return_value=True)
+        monkeypatch.setattr(_line, "_forward_line_ingestion_event", forward)
+        adapter.followup_window_seconds = 600
+
+        event = self._event(mention=False, text="大家好", event_id="evt-1")
+        self._dispatch_and_wait(adapter, event)
+        forward.assert_awaited_once()
+        adapter.handle_message.assert_not_awaited()
+
+        event2 = self._event(mention=True, text="@bot 請摘要", event_id="evt-2")
+        self._dispatch_and_wait(adapter, event2)
+        assert forward.await_count == 2
+
+    def test_window_does_not_affect_allowlist_outside_groups(
+        self, adapter, monkeypatch
+    ):
+        """Follow-up window is group/room only — DM path is unaffected."""
+        monkeypatch.setattr(_line, "_forward_line_ingestion_event", AsyncMock(return_value=True))
+        adapter.followup_window_seconds = 600
+        adapter.allow_all = True
+        # DM messages go through the identity binding gate; mock it as
+        # "already bound" so the message proceeds to handle_message.
+        adapter._handle_identity_gate = AsyncMock(return_value=False)
+
+        dm_event = {
+            "type": "message",
+            "webhookEventId": "evt-dm-1",
+            "replyToken": "reply-token",
+            "source": {"type": "user", "userId": "Udm"},
+            "message": {"id": "msg-dm-1", "type": "text", "text": "你好"},
+        }
+        self._dispatch_and_wait(adapter, dm_event)
+        adapter.handle_message.assert_awaited_once()
+
+        dm_event2 = {
+            "type": "message",
+            "webhookEventId": "evt-dm-2",
+            "replyToken": "reply-token",
+            "source": {"type": "user", "userId": "Udm"},
+            "message": {"id": "msg-dm-2", "type": "text", "text": "再見"},
+        }
+        self._dispatch_and_wait(adapter, dm_event2)
+        assert adapter.handle_message.await_count == 2
+
+    def test_prune_followup_windows_removes_expired_entries(
+        self, adapter, monkeypatch
+    ):
+        """Expired window entries are pruned to prevent unbounded growth."""
+        adapter.followup_window_seconds = 600
+        adapter._followup_windows = {("Cqa", "Ua"): time.time() - 1}
+        adapter._prune_followup_windows()
+        assert not adapter._followup_windows
+
+    def test_prune_followup_windows_keeps_active_entries(
+        self, adapter, monkeypatch
+    ):
+        """Active window entries are preserved during pruning."""
+        adapter.followup_window_seconds = 600
+        adapter._followup_windows = {("Cqa", "Ua"): time.time() + 300}
+        adapter._prune_followup_windows()
+        assert ("Cqa", "Ua") in adapter._followup_windows
 
 
 # ---------------------------------------------------------------------------

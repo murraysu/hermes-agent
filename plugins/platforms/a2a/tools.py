@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -227,9 +228,9 @@ def _reply_text_from_result(result: Any) -> str:
 # Tool handlers
 # --------------------------------------------------------------------------
 
-def a2a_discover(url: str = "", **_: Any) -> str:
+def a2a_discover(args: dict, **_: Any) -> str:
     """Fetch and summarize the Agent Card at ``url``."""
-    url = (url or "").strip()
+    url = str(args.get("url") or "").strip()
     if not url:
         return "Error: 'url' is required (e.g. http://localhost:9999)."
     try:
@@ -262,14 +263,15 @@ def a2a_discover(url: str = "", **_: Any) -> str:
     return "\n".join(lines)
 
 
-def a2a_call(agent: str = "", message: str = "", context_id: str = "", **_: Any) -> str:
+def a2a_call(args: dict, **_: Any) -> str:
     """Send a task to a peer agent and return its reply.
 
     ``agent`` is a configured peer name (from ``a2a_agents``) or a direct URL.
     ``context_id`` continues a prior exchange (multi-turn) when provided.
     """
-    agent = (agent or "").strip()
-    message = (message or "").strip()
+    agent = str(args.get("agent") or args.get("agent_name") or args.get("name") or "").strip()
+    message = str(args.get("message") or args.get("text") or args.get("task") or "").strip()
+    context_id = str(args.get("context_id") or args.get("contextId") or "").strip()
     if not agent or not message:
         return "Error: both 'agent' and 'message' are required."
 
@@ -306,7 +308,7 @@ def a2a_call(agent: str = "", message: str = "", context_id: str = "", **_: Any)
     return f"{header}\n{body}"
 
 
-def a2a_list(**_: Any) -> str:
+def a2a_list(args: dict | None = None, **_: Any) -> str:
     """List configured A2A peers and any persisted conversations."""
     cfg = _load_config()
     peers = cfg.get("a2a_agents") or {}

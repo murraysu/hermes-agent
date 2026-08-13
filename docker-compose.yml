@@ -79,7 +79,7 @@ services:
       # Both defaults in intention_router.py name things that only resolve on
       # node1's compose network. LiteLLM stayed there; channel_gw is a host
       # service on the docker bridge, not localhost-inside-this-container.
-      - INTENTION_ROUTER_BASE_URL=http://192.168.101.7:4000/v1
+      - INTENTION_ROUTER_BASE_URL=http://192.168.101.11:4000/v1
       - CHANNEL_GW_URL=http://172.22.0.1:5000
       # API Keys
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}

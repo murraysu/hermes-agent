@@ -1,0 +1,6 @@
+name: orchestrator-security
+version: "0.1.0"
+description: "Fail-closed host isolation policy for Hermes orchestrator deployments."
+author: "Murray"
+hooks:
+  - pre_tool_call

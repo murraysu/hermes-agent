@@ -63,6 +63,20 @@ class TestBearerAuth:
         assert security.check_bearer(None) is False
         assert security.check_bearer("Basic abc123") is False
 
+    def test_outbound_token_from_environment(self, monkeypatch):
+        monkeypatch.setenv("HERMES_A2A_TOKEN", "runtime-secret")
+        assert tools._auth_header({
+            "type": "bearer",
+            "token_env": "HERMES_A2A_TOKEN",
+        }) == {"Authorization": "Bearer runtime-secret"}
+
+    def test_missing_outbound_token_environment_fails_closed(self, monkeypatch):
+        monkeypatch.delenv("HERMES_A2A_TOKEN", raising=False)
+        assert tools._auth_header({
+            "type": "bearer",
+            "token_env": "HERMES_A2A_TOKEN",
+        }) == {}
+
 
 class TestInjectionFilter:
     def test_chatml_defanged(self):

@@ -172,6 +172,24 @@ TOOLSETS = {
         "tools": ["skills_list", "skill_view", "skill_manage"],
         "includes": []
     },
+
+    "skills_readonly": {
+        "description": "Read-only access to installed skill documents",
+        "tools": ["skills_list", "skill_view"],
+        "includes": []
+    },
+
+    "hermes_orchestrator": {
+        "description": "Host-isolated orchestration tools for user-facing Hermes sessions",
+        "tools": ["todo", "memory", "session_search", "cronjob"],
+        "includes": ["web", "vision", "browser", "skills_readonly", "a2a"]
+    },
+
+    "hermes_cron_safe": {
+        "description": "Host-isolated tools for scheduled Hermes runs",
+        "tools": ["memory", "session_search"],
+        "includes": ["web", "skills_readonly", "a2a"]
+    },
     
     "browser": {
         "description": "Browser automation for web interaction (navigate, click, type, scroll, iframes, hold-click) with web search for finding URLs",
@@ -188,6 +206,12 @@ TOOLSETS = {
     "cronjob": {
         "description": "Cronjob management tool - create, list, update, pause, resume, remove, and trigger scheduled tasks",
         "tools": ["cronjob"],
+        "includes": []
+    },
+
+    "a2a": {
+        "description": "Call configured Agent-to-Agent peers",
+        "tools": ["a2a_discover", "a2a_call", "a2a_list", "a2a_history", "a2a_orchestrate"],
         "includes": []
     },
     

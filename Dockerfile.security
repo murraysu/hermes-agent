@@ -1,0 +1,6 @@
+FROM hermes-agent-hermes-agent:latest
+
+COPY --chown=root:root --chmod=0644 toolsets.py /opt/hermes/toolsets.py
+COPY --chown=root:root --chmod=0644 plugins/platforms/a2a/tools.py /opt/hermes/plugins/platforms/a2a/tools.py
+COPY --chown=root:root --chmod=0644 plugins/orchestrator-security/plugin.yaml /opt/hermes/plugins/orchestrator-security/plugin.yaml
+COPY --chown=root:root --chmod=0644 plugins/orchestrator-security/__init__.py /opt/hermes/plugins/orchestrator-security/__init__.py

@@ -63,8 +63,14 @@ def _resolve_peer(agent: str) -> Optional[dict]:
 
 
 def _auth_header(auth: dict) -> dict:
-    if auth and auth.get("type") == "bearer" and auth.get("token"):
-        return {"Authorization": f"Bearer {auth['token']}"}
+    if not auth or auth.get("type") != "bearer":
+        return {}
+    token = auth.get("token")
+    token_env = auth.get("token_env")
+    if token_env:
+        token = os.getenv(str(token_env), "").strip()
+    if token:
+        return {"Authorization": f"Bearer {token}"}
     return {}
 
 

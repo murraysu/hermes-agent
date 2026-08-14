@@ -179,10 +179,34 @@ TOOLSETS = {
         "includes": []
     },
 
+    "file_readonly": {
+        "description": "Read-only file access: read and search, no write or patch",
+        "tools": ["read_file", "search_files"],
+        "includes": []
+    },
+
     "hermes_orchestrator": {
         "description": "Host-isolated orchestration tools for user-facing Hermes sessions",
         "tools": ["todo", "memory", "session_search", "cronjob"],
         "includes": ["web", "vision", "browser", "skills_readonly", "a2a"]
+    },
+
+    # hermes_orchestrator plus read-only file access. Deliberately a SEPARATE
+    # toolset rather than a relaxation of hermes_orchestrator: the strict set
+    # is what the publicly reachable surfaces (line, telegram, api_server)
+    # keep, and `tests/test_orchestrator_toolsets.py` pins that invariant.
+    # Point only an authenticated, non-public surface at this one — locally
+    # that is `platform_toolsets.cli`, which backs the dashboard chat (the
+    # dashboard is bound to loopback and sits behind the auth gate).
+    #
+    # Read-only is the point: the inputs to these sessions are transcripts and
+    # web pages, i.e. attacker-influenced text. Reading is the capability the
+    # user actually needs; write_file/patch would let injected text edit
+    # /opt/data (config, API keys) and is NOT included.
+    "hermes_orchestrator_files": {
+        "description": "hermes_orchestrator plus read-only file access, for authenticated non-public surfaces",
+        "tools": [],
+        "includes": ["hermes_orchestrator", "file_readonly"]
     },
 
     "hermes_cron_safe": {

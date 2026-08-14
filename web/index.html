@@ -9,13 +9,21 @@
     />
     <title>Hermes Agent - Dashboard</title>
     <!--
+      DO NOT write a literal closing-head tag anywhere in this file's
+      comments. `hermes_cli/web_server.py` injects its bootstrap with
+      `html.replace("</hea" + "d>", ..., 1)` — FIRST occurrence only. A
+      comment containing that tag swallows the injection along with every
+      script and stylesheet tag that follows it, and the dashboard renders
+      a blank page with zero asset requests. That regression shipped in
+      r5 and was fixed in r6.
+
       Resolves a built asset path against the deploy's path prefix. Emitted
       into every chunk URL by `experimental.renderBuiltUrl` in
       vite.config.ts, so it MUST be defined before any bundle code runs —
       this inline script is parsed before the deferred module scripts
       execute, and before the `window.__HERMES_BASE_PATH__` assignment that
-      `hermes_cli/web_server.py` injects just above </head> (we read that
-      global lazily at call time, so the ordering between the two is free).
+      web_server.py injects at the end of the head (we read that global
+      lazily at call time, so the ordering between the two is free).
 
       Why this exists: Vite bakes `base` (default "/") into the modulepreload
       URLs in __vite__mapDeps at BUILD time. Behind a sub-path proxy

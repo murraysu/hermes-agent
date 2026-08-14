@@ -59,6 +59,33 @@ function hermesDevToken(): Plugin {
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), hermesDevToken()],
+  // Sub-path deploys (nginx `location /hermes/` -> dashboard :9119) need
+  // every built URL to carry the prefix. `base` cannot do it: it is baked
+  // in at build time, and the same bundle is served both at the root and
+  // behind a prefix. So resolve per host type instead.
+  experimental: {
+    renderBuiltUrl(filename, { hostType }) {
+      if (hostType === "js") {
+        // modulepreload URLs in __vite__mapDeps, worker/asset URLs. These
+        // are the ones that break the chat/sessions routes when they miss
+        // the prefix. `__hermesAssetUrl` is defined in index.html and reads
+        // `window.__HERMES_BASE_PATH__` (injected by web_server.py).
+        return { runtime: `window.__hermesAssetUrl(${JSON.stringify(filename)})` };
+      }
+      if (hostType === "css") {
+        // Fonts referenced from CSS (`url(/assets/*.woff2)`,
+        // `/fonts-terminal/*`) 404 under a prefix too — the browser just
+        // falls back silently, so it is easy to miss. A CSS url() resolves
+        // against the stylesheet's own URL, which already carries the
+        // prefix, so relative is both correct and prefix-agnostic.
+        return { relative: true };
+      }
+      // html: left at the default absolute form on purpose —
+      // `hermes_cli/web_server.py` rewrites `href="/assets/` etc. in
+      // index.html server-side and matches on that exact shape.
+      return undefined;
+    },
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

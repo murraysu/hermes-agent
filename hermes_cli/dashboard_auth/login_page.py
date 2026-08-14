@@ -47,28 +47,28 @@ _LOGIN_HTML_TEMPLATE = """\
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url('/fonts/Collapse-Regular.woff2') format('woff2');
+    src: url('{font_base}/fonts/Collapse-Regular.woff2') format('woff2');
   }}
   @font-face {{
     font-family: 'Collapse';
     font-style: normal;
     font-weight: 700;
     font-display: swap;
-    src: url('/fonts/Collapse-Bold.woff2') format('woff2');
+    src: url('{font_base}/fonts/Collapse-Bold.woff2') format('woff2');
   }}
   @font-face {{
     font-family: 'Rules Compressed';
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url('/fonts/RulesCompressed-Regular.woff2') format('woff2');
+    src: url('{font_base}/fonts/RulesCompressed-Regular.woff2') format('woff2');
   }}
   @font-face {{
     font-family: 'Rules Compressed';
     font-style: normal;
     font-weight: 600;
     font-display: swap;
-    src: url('/fonts/RulesCompressed-Medium.woff2') format('woff2');
+    src: url('{font_base}/fonts/RulesCompressed-Medium.woff2') format('woff2');
   }}
 
   :root {{
@@ -485,9 +485,16 @@ def render_login_html(*, next_path: str = "", prefix: str = "") -> str:
     validated by ``normalise_prefix`` (no quotes, angle brackets or
     ``..``), and we HTML-escape / JSON-encode it again per sink.
     """
+    # Fonts live in a CSS ``url()`` inside a ``<style>`` block, where HTML
+    # entities are NOT decoded — so this sink takes the raw prefix, not the
+    # HTML-escaped one. ``normalise_prefix`` already rejects quotes, angle
+    # brackets and whitespace, which is exactly what could break out of
+    # ``url('...')``.
+    font_base = prefix
+
     providers = list_session_providers()
     if not providers:
-        return _EMPTY_HTML
+        return _EMPTY_HTML.replace("url('/fonts/", f"url('{font_base}/fonts/")
 
     if next_path:
         # URL-encode then HTML-escape. The URL-encode step matches the
@@ -523,6 +530,7 @@ def render_login_html(*, next_path: str = "", prefix: str = "") -> str:
     return _LOGIN_HTML_TEMPLATE.format(
         provider_buttons="\n".join(buttons),
         password_script=script,
+        font_base=font_base,
     )
 
 

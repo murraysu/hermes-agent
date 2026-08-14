@@ -13,6 +13,18 @@ act/
 .vscode/
 .env
 .op.env
+# ⚠️ 這個 repo 是 PUBLIC fork。上面那條 `.env` 只精確比對檔名，
+#   `.env.bak-<日期>-<原因>` 這種手動備份**不會**被蓋到，會以 untracked 出現，
+#   一次 `git add -A` 就把 production 的 LINE / OpenAI / Anthropic 金鑰推上公開
+#   repo——而 fork network 的物件事後刪不掉。
+.env.bak*
+.env.*.bak
+# 同理，手動留下的設定備份也一併擋掉（nginx.conf.bak-…、docker-compose.yml.bak-… 等）。
+*.bak-*
+# ⚠️ certbot/conf/accounts/…/private_key.json 是 Let's Encrypt 的 ACME
+#   **帳號私鑰**，而且是 JWK(JSON)不是 PEM——`grep "BEGIN PRIVATE KEY"`
+#   之類的檢查掃不到它。外流等於別人可以用這個帳號吊銷/管理憑證。
+certbot/
 .env.local
 .env.development.local
 .env.test.local

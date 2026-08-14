@@ -190,6 +190,9 @@ apps/desktop/demo/
 
 # Local deployment (SM121) — machine-specific, never committed
 .gitnexus
+# codebase-memory-mcp 的本機索引（取代 gitnexus 後的工具）。內容是這台機器
+# 上這份 checkout 的解析結果，換機或改動後就過期，不是程式碼的產物。
+.codebase-memory/
 .claude/
 backups/
 ssl/

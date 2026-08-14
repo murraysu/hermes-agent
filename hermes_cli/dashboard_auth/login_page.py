@@ -22,6 +22,7 @@ class name MUST NOT change without updating
 from __future__ import annotations
 
 import html
+import json
 
 from hermes_cli.dashboard_auth import list_session_providers
 
@@ -409,9 +410,19 @@ auth gate (not recommended on untrusted networks).</p>
 # Plain string (NOT run through ``str.format``), so braces are literal —
 # do not double them. A single delegated submit handler covers all forms;
 # the provider name is read from the form's ``data-provider`` attribute.
+#
+# ``__HERMES_PREFIX_JSON__`` is the one substitution, applied by
+# :func:`render_login_html` via ``str.replace`` (NOT ``str.format``, which
+# would choke on the literal braces). It expands to a JSON string literal
+# holding the X-Forwarded-Prefix — ``"/hermes"`` behind a sub-path proxy,
+# ``""`` on a direct deploy. Every URL this script builds must go through
+# it: the page is served under the prefix, but ``fetch``/``assign`` take
+# root-absolute paths, so a bare ``/auth/password-login`` escapes the mount
+# and 404s at the proxy while the form just says "sign-in failed".
 _PASSWORD_FORM_SCRIPT = """\
 <script>
 (function () {
+  var PREFIX = __HERMES_PREFIX_JSON__;
   function handle(form) {
     form.addEventListener('submit', function (ev) {
       ev.preventDefault();
@@ -425,7 +436,7 @@ _PASSWORD_FORM_SCRIPT = """\
         password: (form.querySelector('input[name=password]') || {}).value || '',
         next: (form.querySelector('input[name=next]') || {}).value || ''
       };
-      fetch('/auth/password-login', {
+      fetch(PREFIX + '/auth/password-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -433,7 +444,7 @@ _PASSWORD_FORM_SCRIPT = """\
       }).then(function (resp) {
         if (resp.ok) {
           return resp.json().then(function (data) {
-            window.location.assign((data && data.next) || '/');
+            window.location.assign(PREFIX + ((data && data.next) || '/'));
           });
         }
         var msg = resp.status === 429
@@ -455,7 +466,7 @@ _PASSWORD_FORM_SCRIPT = """\
 """
 
 
-def render_login_html(*, next_path: str = "") -> str:
+def render_login_html(*, next_path: str = "", prefix: str = "") -> str:
     """Return the full HTML for ``GET /login``.
 
     ``next_path`` — when set, the post-login landing path the user
@@ -464,6 +475,15 @@ def render_login_html(*, next_path: str = "") -> str:
     end-to-end. The caller (``routes.login_page``) is responsible for
     validating ``next_path`` against the same-origin rules before we
     emit it; we still HTML-escape it as defence in depth.
+
+    ``prefix`` — the normalised X-Forwarded-Prefix for this request
+    (``"/hermes"`` behind a sub-path proxy, ``""`` on a direct deploy).
+    Every URL on this page is root-absolute, so without the prefix they
+    all point outside the mount: the OAuth button 404s and the password
+    form POSTs to a path the proxy hands to whatever owns ``location /``.
+    The caller passes ``routes._prefix(request)``; the value is already
+    validated by ``normalise_prefix`` (no quotes, angle brackets or
+    ``..``), and we HTML-escape / JSON-encode it again per sink.
     """
     providers = list_session_providers()
     if not providers:
@@ -479,6 +499,8 @@ def render_login_html(*, next_path: str = "") -> str:
     else:
         next_qs = ""
 
+    safe_prefix = html.escape(prefix, quote=True)
+
     buttons = []
     needs_password_script = False
     for p in providers:
@@ -488,10 +510,16 @@ def render_login_html(*, next_path: str = "") -> str:
         else:
             buttons.append(
                 f'      <a class="provider-btn" '
-                f'href="/auth/login?provider={html.escape(p.name, quote=True)}{next_qs}">'
+                f'href="{safe_prefix}/auth/login?provider={html.escape(p.name, quote=True)}{next_qs}">'
                 f'Sign in with {html.escape(p.display_name)}</a>'
             )
-    script = _PASSWORD_FORM_SCRIPT if needs_password_script else ""
+    script = (
+        _PASSWORD_FORM_SCRIPT.replace(
+            "__HERMES_PREFIX_JSON__", json.dumps(prefix)
+        )
+        if needs_password_script
+        else ""
+    )
     return _LOGIN_HTML_TEMPLATE.format(
         provider_buttons="\n".join(buttons),
         password_script=script,

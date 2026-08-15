@@ -65,7 +65,6 @@ services:
       - HERMES_DASHBOARD=1
       - HERMES_DASHBOARD_HOST=0.0.0.0
       - HERMES_DASHBOARD_PORT=9119
-      - HERMES_SECURITY_PROFILE=orchestrator
       - HERMES_A2A_TOKEN=${HERMES_A2A_TOKEN:?set in .env}
       # Upstream v0.18.x removed HERMES_DASHBOARD_INSECURE: any non-loopback
       # dashboard bind now fail-closes without an auth provider. Basic auth

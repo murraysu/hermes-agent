@@ -221,6 +221,53 @@ source .venv/bin/activate   # or: source venv/bin/activate
 `$HOME/.hermes/hermes-agent/venv` (for worktrees that share a venv with the
 main checkout).
 
+### Fork-local: running tests on the svc1 deployment
+
+<!-- FORK-LOCAL (murraysu/hermes-agent). Not upstream. Expect this block to
+     conflict on upstream sync — keep it, it does not exist upstream. -->
+
+⚠️ **On svc1 the tests DO run. Do not conclude "no dev environment here."**
+The advice above does not apply: this checkout's `.venv` has no project
+dependencies, the runtime image ships neither `pytest` nor `pip`, and
+`scripts/run_tests.sh` skips every candidate venv because it requires one with
+`pytest` already installed. On 2026-08-15 that chain of failures led to four
+image builds shipping untested; one of them (r5) blanked the whole dashboard.
+
+Layer the dependencies with `uv run --with` instead. This does **not** touch
+`.venv` — important, because `.venv` must keep `--extra honcho` and should not
+be `uv sync`ed casually:
+
+```bash
+uv run --no-sync --with pytest --with fastapi --with httpx \
+       --with pyyaml --with python-multipart \
+       python -m pytest tests/hermes_cli/test_dashboard_auth_prefix.py -q
+```
+
+Those four are the only missing deps. Pure-logic tests need even less —
+`tests/test_orchestrator_toolsets.py` only imports `toolsets`, so
+`--with pytest` alone suffices.
+
+⚠️ This runs every file in **one** pytest process, whereas `run_tests.sh`
+spawns a fresh process per file to match CI. Cross-file state leakage can
+therefore hide here. Treat a green run as necessary, not sufficient.
+
+Frontend:
+
+```bash
+cd web && npm ci && npm test    # vitest; node comes from nvm (v24)
+```
+
+`npm run build` needs no local run — the Docker build does it.
+
+Before deploying a change under `hermes_cli/dashboard_auth/`, `web/`, or
+`toolsets.py`, run the set listed in the fork-local `CLAUDE.md`. Last measured:
+backend 72 passed / 1 skipped, frontend 20 files / 135 passed.
+
+⚠️ **A 200 from `curl` on every asset URL does not mean the browser will
+request it.** In the r5 incident every URL was fine — they had stopped being
+tags, swallowed by an HTML comment. Assert after stripping comments; see
+`tests/test_spa_index_head_injection.py`.
+
 ## Project Structure
 
 File counts shift constantly — don't treat the tree below as exhaustive.

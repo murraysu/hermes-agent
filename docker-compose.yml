@@ -53,7 +53,7 @@ services:
   # ====================
   hermes-agent:
     build: .
-    image: hermes-agent-hermes-agent:security-20260813-v20-r8
+    image: hermes-agent-hermes-agent:sync-20260819-v2026.8.18-r1
     container_name: hermes-agent-sm121
     ports:
       - "127.0.0.1:3001:9119"  # Web dashboard; nginx uses the internal network

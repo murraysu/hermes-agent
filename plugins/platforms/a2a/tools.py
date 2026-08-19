@@ -24,8 +24,8 @@ v1.0 JSON-RPC ``message/send`` method; replies from v0.3 peers still parse.
 from __future__ import annotations
 
 import json
-import logging
 import os
+import logging
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -70,6 +70,14 @@ def _resolve_peer(agent: str) -> Optional[dict]:
 
 
 def _auth_header(auth: dict) -> dict:
+    # Local fork addition (kept through the 2026-08-19 upstream sync):
+    # `token_env` lets a peer's bearer token live in the process environment
+    # instead of inline in config.yaml. ~/ai-stack renders that config from
+    # inventory into a Docker volume, so an inline token would be a secret
+    # sitting in a rendered file; all three of our a2a_agents entries use
+    # `token_env: HERMES_A2A_TOKEN`. Upstream only reads `token`, so dropping
+    # this would make _auth_header() return {} and silently strip the
+    # Authorization header off every outbound A2A call.
     if not auth or auth.get("type") != "bearer":
         return {}
     token = auth.get("token")
@@ -269,6 +277,7 @@ def a2a_call(args: dict, **_: Any) -> str:
     ``agent`` is a configured peer name (from ``a2a_agents``) or a direct URL.
     ``context_id`` continues a prior exchange (multi-turn) when provided.
     """
+    # Accept common aliases models reach for (observed live: 'agent_name').
     agent = str(args.get("agent") or args.get("agent_name") or args.get("name") or "").strip()
     message = str(args.get("message") or args.get("text") or args.get("task") or "").strip()
     context_id = str(args.get("context_id") or args.get("contextId") or "").strip()

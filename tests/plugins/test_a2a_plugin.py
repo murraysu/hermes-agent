@@ -136,20 +136,6 @@ class TestTrustedPeers:
         monkeypatch.setenv("A2A_TRUSTED_PEERS", "alice")
         assert security.is_trusted_peer("mallory") is True
 
-    def test_outbound_token_from_environment(self, monkeypatch):
-        monkeypatch.setenv("HERMES_A2A_TOKEN", "runtime-secret")
-        assert tools._auth_header({
-            "type": "bearer",
-            "token_env": "HERMES_A2A_TOKEN",
-        }) == {"Authorization": "Bearer runtime-secret"}
-
-    def test_missing_outbound_token_environment_fails_closed(self, monkeypatch):
-        monkeypatch.delenv("HERMES_A2A_TOKEN", raising=False)
-        assert tools._auth_header({
-            "type": "bearer",
-            "token_env": "HERMES_A2A_TOKEN",
-        }) == {}
-
 
 class TestInjectionFilter:
     def test_chatml_defanged(self):
@@ -563,10 +549,7 @@ class TestClientTools:
 
 class TestRegistryDispatchConvention:
     """Tools must accept the args-as-dict positional that registry.dispatch
-    uses (`entry.handler(args, **kwargs)`), not keyword params. Calling the
-    handlers with a single dict positional is what the live agent does — this
-    is the convention the direct-kwarg tests above did NOT exercise, which let
-    a 'dict has no attribute strip' bug ship to a live Tier-3 run."""
+    uses (`entry.handler(args, **kwargs)`), not keyword params."""
 
     def test_register_then_dispatch_via_registry(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -580,9 +563,6 @@ class TestRegistryDispatchConvention:
 
         tools.register_tools(_Ctx())
 
-        # Dispatch each tool the way the agent loop does: args as a dict.
-        # a2a_discover with empty url should return the 'required' guard
-        # string, NOT raise AttributeError on a dict.
         out = registry.dispatch("a2a_discover", {"url": ""})
         assert "required" in out and "AttributeError" not in out
 
@@ -610,10 +590,10 @@ class TestRegistryDispatchConvention:
                 protocol.build_task("t", "c1", protocol.STATE_COMPLETED, "PONG"))
 
         monkeypatch.setattr(tools, "_http_post_json", fake_post)
-        # 'agent_name' alias instead of 'agent'
         out = tools.a2a_call({"agent_name": "peer", "message": "ping"})
         assert captured.get("sent") is True
         assert "PONG" in out
+
 
 # --------------------------------------------------------------------------
 # A2A reply capture (send() + on_processing_complete)

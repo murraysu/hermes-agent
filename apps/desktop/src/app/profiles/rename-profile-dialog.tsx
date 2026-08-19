@@ -11,10 +11,12 @@ import {
   DialogTitle
 } from '@/components/ui/dialog'
 import { Field, FieldHint } from '@/components/ui/field'
-import { Input } from '@/components/ui/input'
+import { SanitizedInput } from '@/components/ui/sanitized-input'
 import { renameProfile } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { AlertTriangle } from '@/lib/icons'
+import { slug } from '@/lib/sanitize'
+import { retireLocalProfileGateways } from '@/store/gateway'
 
 import { isValidProfileName } from './create-profile-dialog'
 
@@ -71,6 +73,11 @@ export function RenameProfileDialog({
     setError(null)
 
     try {
+      // A retained renderer socket for the old name would treat the rename's
+      // backend teardown as a transient drop and redial, resurrecting the
+      // old-name backend whose ensure_hermes_home() recreates the directory
+      // the rename just moved (same class as the delete path, #88638).
+      retireLocalProfileGateways(currentName)
       await renameProfile(currentName, trimmed)
       await onRenamed?.(trimmed)
       setStatus('done')
@@ -95,11 +102,12 @@ export function RenameProfileDialog({
 
         <form className="grid gap-4" onSubmit={handleSubmit}>
           <Field htmlFor="rename-profile-name" label={p.newNameLabel}>
-            <Input
+            <SanitizedInput
               aria-invalid={invalid}
               autoFocus
               id="rename-profile-name"
-              onChange={event => setName(event.target.value)}
+              onValueChange={setName}
+              sanitize={slug}
               value={name}
             />
             <FieldHint error={invalid}>{p.nameHint}</FieldHint>

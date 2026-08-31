@@ -40,6 +40,10 @@ ui-tui/packages/hermes-ink/dist/
 # Environment files
 .env
 .env.*
+# ...but keep the template: docker/stage2-hook.sh seeds $HERMES_HOME/.env from
+# /opt/hermes/.env.example on first boot (OOF-285 — excluding it silently broke
+# first-boot .env seeding and the API_SERVER_KEY generation that depends on it).
+!.env.example
 
 # IDE
 .vscode/
@@ -98,7 +102,6 @@ plans/
 .plans/
 
 # Repo-level dotfiles that are git-only or dev-tooling config
-.env.example
 .envrc
 .gitattributes
 .hadolint.yaml
@@ -110,3 +113,10 @@ ssl/
 backups/
 .gitnexus
 .claude/
+
+# Repo-root debug/export artifacts — must never reach image layers (COPY . .)
+/log.txt
+/sqlite_leak_fix.png
+/*.png.bak
+/default.tar.gz
+/*.tar.gz

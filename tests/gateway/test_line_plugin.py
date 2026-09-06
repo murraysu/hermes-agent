@@ -654,10 +654,14 @@ class TestInboundMedia:
         return adapter.handle_message.await_args.args[0]
 
     def test_image_message_uses_photo_type_and_image_mime(self, adapter):
-        with patch.object(_line, "cache_image_from_bytes", return_value="/cache/image.jpg") as cache:
+        with patch.object(
+            _line,
+            "cache_image_from_bytes_async",
+            new=AsyncMock(return_value="/cache/image.jpg"),
+        ) as cache:
             asyncio.run(adapter._handle_message_event(self._event("image")))
 
-        cache.assert_called_once_with(b"line-bytes", ext=".jpg")
+        cache.assert_awaited_once_with(b"line-bytes", ext=".jpg")
         event = self._captured_event(adapter)
         assert event.message_type is _line.MessageType.PHOTO
         assert event.media_urls == ["/cache/image.jpg"]
@@ -1042,7 +1046,8 @@ class TestFileExtensionFiltering:
         }
 
     def test_supported_file_downloaded_and_queued(self, adapter):
-        with patch.object(_line, "cache_document_from_bytes", return_value="/cache/doc.pdf") as cache:
+        with patch.object(_line, "cache_document_from_bytes_async",
+                          new=AsyncMock(return_value="/cache/doc.pdf")) as cache:
             asyncio.run(adapter._handle_message_event(self._file_event("doc.pdf")))
         cache.assert_called_once()
         adapter.handle_message.assert_awaited_once()
@@ -1053,7 +1058,7 @@ class TestFileExtensionFiltering:
     def test_unsupported_file_rejected_via_direct_reply_not_llm(self, adapter):
         """Unsupported file extensions must be rejected with a direct reply,
         NOT forwarded to handle_message (which would send them to the LLM)."""
-        with patch.object(_line, "cache_document_from_bytes") as cache:
+        with patch.object(_line, "cache_document_from_bytes_async", new=AsyncMock()) as cache:
             asyncio.run(adapter._handle_message_event(self._file_event("malware.exe")))
         cache.assert_not_called()
         adapter._send_text_chunks.assert_awaited_once()

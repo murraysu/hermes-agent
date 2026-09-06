@@ -6,13 +6,23 @@ import os
 from typing import Any, Optional
 
 
+# ⚠️ These are TOOL names, not toolset names, and upstream renames them.
+# The 2026-09-06 sync renamed `process` -> `process_manage`; a stale entry here
+# fails OPEN (the tool is simply not matched) with no error anywhere, so this
+# set must be re-checked against tools/ on every upstream sync.
+# `tests/plugins/test_orchestrator_security.py` pins the ones that matter.
 _BLOCKED_TOOLS = frozenset({
     "terminal",
-    "process",
+    "process_manage",
     "read_terminal",
     "close_terminal",
     "focus_pane",
     "open_preview",
+    "close_preview",
+    "read_preview",
+    "drive_preview",
+    "annotate_preview",
+    "desktop_preview",
     "computer_use",
     "read_file",
     "write_file",

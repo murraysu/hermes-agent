@@ -9,7 +9,7 @@ BLOCKED = {
 
 def test_orchestrator_toolset_has_a2a_and_no_host_tools():
     tools = set(resolve_toolset("hermes_orchestrator"))
-    assert {"a2a_call", "a2a_list", "skills_list", "skill_view", "cronjob"} <= tools
+    assert {"a2a_call", "a2a_list", "skills_list", "skill_view", "cronjob_manage"} <= tools
     assert not tools & BLOCKED
 
 

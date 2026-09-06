@@ -373,3 +373,22 @@ class TestLoginPageRender:
         finally:
             clear_providers()
 
+
+    def test_absolute_next_is_not_prefixed(self):
+        """A native (desktop) sign-in resolves ``next`` to an absolute loopback
+        redirect_uri. Concatenating the mount prefix onto it produced
+        ``/hermeshttp://127.0.0.1:<port>/callback`` — a 404 on the proxy, so the
+        desktop never received its code and retried ws-ticket forever on 401.
+        A protocol-relative ``//host`` must STAY prefixed (it would otherwise
+        become an off-site redirect)."""
+        clear_providers()
+        register_provider(PasswordProvider())
+        try:
+            html = render_login_html(next_path="/sessions", prefix="/hermes")
+            # The naive concatenation must be gone...
+            assert "assign(PREFIX + ((data && data.next)" not in html
+            # ...replaced by a scheme test that only exempts http(s) URLs.
+            assert "absolute ? next : PREFIX + next" in html
+            assert "'http://'" in html and "'https://'" in html
+        finally:
+            clear_providers()

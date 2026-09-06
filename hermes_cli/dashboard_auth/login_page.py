@@ -419,7 +419,18 @@ _PASSWORD_FORM_SCRIPT = """\
       }).then(function (resp) {
         if (resp.ok) {
           return resp.json().then(function (data) {
-            window.location.assign(PREFIX + ((data && data.next) || '/'));
+            var next = (data && data.next) || '/';
+            // A native (desktop) sign-in returns an ABSOLUTE loopback
+            // redirect_uri (http://127.0.0.1:<port>/callback?code=...), not a
+            // path. Prefixing that produces "/hermeshttp://127.0.0.1:..." --
+            // a 404 from whatever the proxy serves at the root, and the
+            // desktop never receives its code (it then retries ws-ticket
+            // forever on 401). Only a same-origin path takes the mount
+            // prefix; a protocol-relative "//host" is NOT matched here, so it
+            // stays prefixed and cannot become an off-site redirect.
+            var head = next.slice(0, 8).toLowerCase();
+            var absolute = head.indexOf('http://') === 0 || head.indexOf('https://') === 0;
+            window.location.assign(absolute ? next : PREFIX + next);
           });
         }
         var msg = resp.status === 429

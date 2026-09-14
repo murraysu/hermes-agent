@@ -29,7 +29,10 @@ from hermes_cli.dashboard_auth import (
     register_provider,
 )
 from hermes_cli.dashboard_auth.cookies import SESSION_AT_COOKIE, SESSION_RT_COOKIE
-from hermes_cli.dashboard_auth.login_page import render_login_html
+from hermes_cli.dashboard_auth.login_page import (
+    render_login_html,
+    render_native_provider_choice_html,
+)
 from hermes_cli.dashboard_auth.routes import _reset_password_rate_limit
 from tests.hermes_cli.conftest_dashboard_auth import StubAuthProvider
 
@@ -392,3 +395,17 @@ class TestLoginPageRender:
             assert "'http://'" in html and "'https://'" in html
         finally:
             clear_providers()
+
+    def test_native_provider_chooser_renders_with_prefixed_fonts(self):
+        """The login template carries our ``{font_base}`` placeholder. Upstream's
+        native provider chooser (#107018) formats the same template without it,
+        which merged cleanly and then raised ``KeyError: 'font_base'`` for any
+        deployment with more than one interactive provider."""
+        page = render_native_provider_choice_html(
+            providers=[StubAuthProvider(), PasswordProvider()],
+            authorize_path="/hermes/auth/native/authorize",
+            code_challenge="c", code_challenge_method="S256",
+            redirect_uri="http://127.0.0.1:1/callback", state="s", prefix="/hermes")
+        assert page.count('class="provider-btn"') == 2
+        assert "url('/hermes/fonts/Collapse-Regular.woff2')" in page
+        assert "url('/fonts/" not in page

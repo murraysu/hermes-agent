@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import html
 import json
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from hermes_cli.dashboard_auth import list_session_providers
 
@@ -489,6 +489,32 @@ def render_login_html(*, next_path: str = "", prefix: str = "") -> str:
         ) if needs_password_script else "",
         font_base=prefix,
     )
+
+
+def render_native_provider_choice_html(
+        *, providers, authorize_path: str, code_challenge: str,
+        code_challenge_method: str, redirect_uri: str, state: str, prefix: str = "") -> str:
+    """Provider picker for a native authorize request with more than one interactive provider.
+
+    Every link re-enters ``/auth/native/authorize`` with the SAME desktop PKCE inputs plus an
+    explicit ``provider``, so the choice never leaves the validated native flow.
+
+    ``prefix`` feeds the template's ``{font_base}`` exactly as in ``render_login_html``;
+    ``authorize_path`` already carries it. The template requires the key, so omitting it here
+    raises ``KeyError`` the moment more than one provider is configured.
+    """
+    common = {"code_challenge": code_challenge, "code_challenge_method": code_challenge_method,
+              "redirect_uri": redirect_uri, "state": state}
+    buttons = []
+    for p in providers:
+        href = html.escape(f"{authorize_path}?{urlencode({**common, 'provider': p.name})}",
+                           quote=True)
+        buttons.append(f'      <a class="provider-btn" href="{href}">'
+                       f'Sign in with {html.escape(p.display_name)}</a>')
+    if not buttons:
+        return _EMPTY_HTML.replace("url('/fonts/", f"url('{prefix}/fonts/")
+    return _LOGIN_HTML_TEMPLATE.format(
+        provider_buttons="\n".join(buttons), password_script="", font_base=prefix)
 
 
 def _render_password_form(provider, next_path: str) -> str:

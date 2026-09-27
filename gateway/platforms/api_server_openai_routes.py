@@ -664,7 +664,9 @@ class OpenAICompatRoutesMixin:
         run_kwargs = dict(
             user_message=user_message, conversation_history=history,
             ephemeral_system_prompt=system_prompt, session_id=session_id,
-            gateway_session_key=gateway_session_key, **agent_overrides, route=route,
+            gateway_session_key=gateway_session_key,
+            user_id=body.get("user") if isinstance(body.get("user"), str) else None,
+            **agent_overrides, route=route,
             relay_metadata=relay_metadata,
             # #98619: only an explicitly provided X-Hermes-Session-Id is wake-capable (the
             # header is 403-gated on API_SERVER_KEY, so the wake self-post can authenticate
@@ -1047,7 +1049,9 @@ class OpenAICompatRoutesMixin:
         run_kwargs = dict(
             user_message=user_message, conversation_history=conversation_history,
             ephemeral_system_prompt=instructions, session_id=session_id,
-            gateway_session_key=gateway_session_key, bind_declared_conversation=_declared_selected,
+            gateway_session_key=gateway_session_key,
+            user_id=body.get("user") if isinstance(body.get("user"), str) else None,
+            bind_declared_conversation=_declared_selected,
             **agent_overrides, route=route, relay_metadata=relay_metadata)
         if stream:
             _stream_q = ThreadSafeAsyncQueue()

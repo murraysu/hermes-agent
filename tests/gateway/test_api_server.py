@@ -247,7 +247,7 @@ class TestAdapterInit:
         adapter = APIServerAdapter(PlatformConfig(enabled=True))
         monkeypatch.setattr(adapter, "_ensure_session_db", lambda: None)
 
-        agent = adapter._create_agent(session_id="api-session")
+        agent = adapter._create_agent(session_id="api-session", user_id="employee-42")
 
         assert isinstance(agent, FakeAgent)
         assert captured["reasoning_config"] == {"enabled": True, "effort": "xhigh"}
@@ -255,6 +255,7 @@ class TestAdapterInit:
         assert captured["checkpoint_max_snapshots"] == 7
         assert captured["checkpoint_max_total_size_mb"] == 321
         assert captured["checkpoint_max_file_size_mb"] == 4
+        assert captured["user_id"] == "employee-42"
 
 
 # ---------------------------------------------------------------------------
@@ -481,9 +482,9 @@ class TestRelayMetadataForwarding:
         [
             (
                 "/v1/chat/completions",
-                {"messages": [{"role": "user", "content": "hi"}]},
+                {"messages": [{"role": "user", "content": "hi"}], "user": "employee-42"},
             ),
-            ("/v1/responses", {"input": "hi"}),
+            ("/v1/responses", {"input": "hi", "user": "employee-42"}),
         ],
     )
     async def test_openai_requests_forward_metadata_to_relay(
@@ -502,6 +503,7 @@ class TestRelayMetadataForwarding:
         assert response.status == 200
         assert mock_run.call_args.kwargs["relay_metadata"] == metadata
         assert mock_run.call_args.kwargs["relay_metadata"] is not metadata
+        assert mock_run.call_args.kwargs["user_id"] == "employee-42"
 
 
 class TestDisconnectedAgentReap:

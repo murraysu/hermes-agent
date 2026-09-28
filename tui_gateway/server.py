@@ -43,7 +43,9 @@ from tui_gateway.user_messages import (  # noqa: F401
     AGENT_BUILD_ABANDONED, AGENT_MISSING_FOR_TURN, AGENT_STILL_STARTING, agent_init_failed_message, busy_message,
     resume_failed_message, turn_error_text)
 from tui_gateway.transport import (FanoutTransport, StdioTransport, Transport, bind_transport,
-                                   current_transport, reset_transport)
+                                   consume_pty_auth_identity, current_transport, reset_transport)
+
+_stdio_auth_identity = consume_pty_auth_identity()
 
 logger = logging.getLogger(__name__)
 
@@ -2400,10 +2402,14 @@ def _startup_system_prompt(cfg: dict, task_id: str) -> str:
 
 
 def _transport_auth_user_id(transport) -> str | None:
-    """``<provider>:<user id>`` the WS-upgrade credential authenticated for ``transport``, or None for the legacy
-    token, stdio and the PTY child's server-internal credential. The prefix keeps a basic-auth ``alice`` and an
-    OIDC ``alice`` apart."""
+    """Verified login for a WS connection or the dashboard's dedicated stdio child.
+
+    The provider prefix keeps a basic-auth ``alice`` and an OIDC ``alice`` apart.
+    Ordinary CLI/legacy-token connections still have no authenticated identity.
+    """
     identity = getattr(transport, "auth_identity", None)
+    if _stdio_is_rpc_channel and (transport is None or transport is _stdio_transport):
+        identity = _stdio_auth_identity
     if _methods_browser_control._is_authenticated_identity(identity):
         return f"{str(identity['provider']).strip()}:{str(identity['user_id']).strip()}"
     return None

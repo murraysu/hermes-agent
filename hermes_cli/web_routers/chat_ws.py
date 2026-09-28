@@ -499,6 +499,18 @@ async def pty_ws(ws: WebSocket) -> None:
         return
 
     attach_token = ws.query_params.get("attach") or None
+    # Carry only the identity verified by the WS gate, never query/RPC user fields.
+    # Use a dedicated stdio child: the shared gateway URL carries a server-internal
+    # credential, which would discard the login again (including on reconnect).
+    identity = getattr(ws, "_hermes_auth_identity", None)
+    env = dict(env or {})
+    env.pop("HERMES_TUI_AUTH_IDENTITY", None)
+    if identity and identity.get("provider") != "server-internal":
+        principal = json.dumps(identity, sort_keys=True)
+        env["HERMES_TUI_AUTH_IDENTITY"] = principal
+        env.pop("HERMES_TUI_GATEWAY_URL", None)
+        if attach_token is not None:
+            attach_token = f"{principal}\0{attach_token}"
     registry_resume = raw_resume
     if raw_resume and env:
         registry_resume = env.get("HERMES_TUI_RESUME") or raw_resume

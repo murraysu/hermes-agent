@@ -29,6 +29,20 @@ _PEER_GONE_ERRNOS = frozenset({
 
 logger = logging.getLogger(__name__)
 
+
+def consume_pty_auth_identity() -> dict | None:
+    """Read the dashboard's verified PTY identity once; don't forward it to tool children.
+
+    This is a private parent-to-child handoff, never an RPC or user config field.
+    The server applies its normal authenticated-identity validation before using it.
+    """
+    raw = os.environ.pop("HERMES_TUI_AUTH_IDENTITY", "")
+    try:
+        identity = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return identity if isinstance(identity, dict) else None
+
 # When true, StdioTransport skips ``stream.flush`` after writing: on a half-closed pipe (TUI Node parent quit
 # while the gateway still emits) flush can block long enough to starve the worker pool. Python text stdout is
 # fully buffered on a pipe, so this ONLY makes sense with ``-u``/``PYTHONUNBUFFERED=1``; otherwise the TUI hangs.

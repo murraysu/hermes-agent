@@ -1,0 +1,6 @@
+# Patch the verified production runtime without updating its dependencies.
+# Base image ID: sha256:21e9dd6897e9781cd57b9f44e5fadde64094244b2de85dd764c1e3e9924ec848
+# Build from the repository root with -f docker/Dockerfile.pty-identity.
+FROM hermes-agent-hermes-agent:sync-20260927-v0.21.5-r2
+COPY --chown=root:root --chmod=644 hermes_cli/web_routers/chat_ws.py /opt/hermes/hermes_cli/web_routers/chat_ws.py
+COPY --chown=root:root --chmod=644 tui_gateway/server.py tui_gateway/transport.py /opt/hermes/tui_gateway/

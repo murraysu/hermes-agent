@@ -61,6 +61,9 @@ services:
     environment:
       - HERMES_HOME=/opt/data
       - HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
+      # Packaged headless shell for this pinned image; agent-browser's native
+      # discovery does not search PLAYWRIGHT_BROWSERS_PATH. Check on image upgrades.
+      - AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermes/.playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell
       - PYTHONUNBUFFERED=1
       - HERMES_DASHBOARD=1
       - HERMES_DASHBOARD_HOST=0.0.0.0

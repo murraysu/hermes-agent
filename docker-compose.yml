@@ -136,7 +136,7 @@ services:
       - SETUID
     security_opt:
       - no-new-privileges:true
-    pids_limit: 256
+    pids_limit: 512
     mem_limit: 6g
     cpus: 2
 

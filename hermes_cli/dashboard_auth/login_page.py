@@ -12,7 +12,6 @@ href to walk the OAuth flow.
 from __future__ import annotations
 
 import html
-import json
 from urllib.parse import quote, urlencode
 
 from hermes_cli.dashboard_auth import list_session_providers
@@ -394,10 +393,16 @@ an SSH tunnel or Tailscale.</p>
 # login pages stay script-free. Plain string (not ``str.format``): braces are
 # literal. One delegated submit handler covers every form; the provider name
 # comes from the form's ``data-provider`` attribute.
+#
+# Reverse-proxy prefix support: the script reads ``data-prefix`` from the
+# ``<main>`` element (set by :func:`render_login_html`) and prepends it
+# to the POST target and the post-login landing path so the login flow
+# works behind ``X-Forwarded-Prefix`` proxies.
 _PASSWORD_FORM_SCRIPT = """\
 <script>
 (function () {
-  var PREFIX = __HERMES_PREFIX_JSON__;
+  var mainEl = document.querySelector('main');
+  var prefix = (mainEl && mainEl.getAttribute('data-prefix')) || '';
   function handle(form) {
     form.addEventListener('submit', function (ev) {
       ev.preventDefault();
@@ -411,7 +416,7 @@ _PASSWORD_FORM_SCRIPT = """\
         password: (form.querySelector('input[name=password]') || {}).value || '',
         next: (form.querySelector('input[name=next]') || {}).value || ''
       };
-      fetch(PREFIX + '/auth/password-login', {
+      fetch(prefix + '/auth/password-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -430,7 +435,7 @@ _PASSWORD_FORM_SCRIPT = """\
             // stays prefixed and cannot become an off-site redirect.
             var head = next.slice(0, 8).toLowerCase();
             var absolute = head.indexOf('http://') === 0 || head.indexOf('https://') === 0;
-            window.location.assign(absolute ? next : PREFIX + next);
+            window.location.assign(absolute ? next : prefix + next);
           });
         }
         var msg = resp.status === 429
@@ -475,20 +480,44 @@ def render_login_html(*, next_path: str = "", prefix: str = "") -> str:
     # shape so a round-tripped value is byte-identical.
     next_qs = f"&next={html.escape(quote(next_path, safe=''), quote=True)}" if next_path else ""
     buttons = [
-        _render_password_form(p, next_path) if getattr(p, "supports_password", False) else
+        _render_password_form(p, next_path, prefix=prefix)
+        if getattr(p, "supports_password", False) else
         f'      <a class="provider-btn" '
         f'href="{html.escape(prefix, quote=True)}/auth/login?provider={html.escape(p.name, quote=True)}{next_qs}">'
         f'Sign in with {html.escape(p.display_name)}</a>'
         for p in providers
     ]
     needs_password_script = any(getattr(p, "supports_password", False) for p in providers)
-    return _LOGIN_HTML_TEMPLATE.format(
+    html_out = _LOGIN_HTML_TEMPLATE.format(
         provider_buttons="\n".join(buttons),
-        password_script=_PASSWORD_FORM_SCRIPT.replace(
-            "__HERMES_PREFIX_JSON__", json.dumps(prefix)
-        ) if needs_password_script else "",
+        password_script=_PASSWORD_FORM_SCRIPT if needs_password_script else "",
         font_base=prefix,
     )
+    # Inject the reverse-proxy prefix so the password-login JS can read
+    # it from the <main> element's data attribute, and rewrite the font
+    # URLs to stay inside the mount.  ``str.replace`` after ``str.format``
+    # avoids interfering with the CSS ``{{ }}`` doubling in the template.
+    return _apply_proxy_prefix(html_out, prefix)
+
+
+def _apply_proxy_prefix(html_out: str, prefix: str) -> str:
+    """Rewrite a rendered login-family page for a reverse-proxy sub-path.
+
+    Two rewrites, both no-ops when *prefix* is empty (bare-root deploys are
+    byte-for-byte unaffected):
+
+    * ``<main>`` gains ``data-prefix`` so the password-login JS (a plain
+      string, never ``str.format``-aware) can prepend the prefix to its
+      fetch target and post-login landing.
+    * ``@font-face`` ``url('/fonts/...')`` becomes ``url('<prefix>/fonts/...')``
+      so the fonts load from the mount instead of the origin root (404
+      behind a prefix-stripping proxy).
+    """
+    if not prefix:
+        return html_out
+    html_out = html_out.replace("<main>", f'<main data-prefix="{prefix}">', 1)
+    html_out = html_out.replace("url('/fonts/", f"url('{prefix}/fonts/")
+    return html_out
 
 
 def render_native_provider_choice_html(
@@ -517,12 +546,16 @@ def render_native_provider_choice_html(
         provider_buttons="\n".join(buttons), password_script="", font_base=prefix)
 
 
-def _render_password_form(provider, next_path: str) -> str:
+def _render_password_form(provider, next_path: str, *, prefix: str = "") -> str:
     """Username/password form for a ``supports_password`` provider.
 
     ``next_path`` rides in a hidden field (already validated by the caller,
     HTML-escaped here). The provider name is a ``data-`` attribute so the
     script does not depend on field ordering.
+
+    ``prefix`` — reverse-proxy path prefix (e.g. ``"/hermes"``); kept for
+    interface parity with the other renderers (the submit handler reads
+    the prefix from ``<main data-prefix>``).
     """
     pname = html.escape(provider.name, quote=True)
     plabel = html.escape(provider.display_name)

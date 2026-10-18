@@ -53,7 +53,7 @@ services:
   # ====================
   hermes-agent:
     build: .
-    image: hermes-agent-hermes-agent:fix-20260928-pty-honcho-identity
+    image: hermes-agent-hermes-agent:sync-20261018-v0.22.2-r1
     container_name: hermes-agent-sm121
     ports:
       - "192.168.101.11:3001:9119"  # Web dashboard for trusted home LAN/WireGuard clients; auth is required
@@ -61,9 +61,6 @@ services:
     environment:
       - HERMES_HOME=/opt/data
       - HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
-      # Packaged headless shell for this pinned image; agent-browser's native
-      # discovery does not search PLAYWRIGHT_BROWSERS_PATH. Check on image upgrades.
-      - AGENT_BROWSER_EXECUTABLE_PATH=/opt/hermes/.playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell
       - PYTHONUNBUFFERED=1
       - HERMES_DASHBOARD=1
       - HERMES_DASHBOARD_HOST=0.0.0.0

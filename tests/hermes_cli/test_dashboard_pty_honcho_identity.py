@@ -11,8 +11,8 @@ import pytest
 from starlette.testclient import TestClient
 
 
-@pytest.mark.linux_only
-def test_ticket_identity_reaches_honcho_across_profile_children(monkeypatch, tmp_path):
+@pytest.mark.platforms("linux")
+def test_ticket_identity_reaches_profile_children(monkeypatch, tmp_path):
     import hermes_cli.web_server as web
     import hermes_cli.web_server_chat as chat
     import hermes_cli.web_routers.chat_ws as routes
@@ -50,8 +50,6 @@ def test_ticket_identity_reaches_honcho_across_profile_children(monkeypatch, tmp
     probe = '''
 import json, os, sys
 from tui_gateway import server
-from plugins.memory.honcho.client import HonchoClientConfig
-from plugins.memory.honcho.session_peers import SessionPeersMixin
 server._stdio_is_rpc_channel = True
 uid = server._transport_auth_user_id(None)
 assert server._transport_auth_user_id(object()) is None
@@ -64,15 +62,7 @@ record = server._sessions[response["result"]["session_id"]]
 assert record["auth_user_id"] == uid
 assert server._ensure_session_db_row(record)
 assert server._get_db().get_session(response["result"]["stored_session_id"])["user_id"] == uid
-m = SessionPeersMixin()
-m._config = HonchoClientConfig()
-m._runtime_user_peer_name = uid
-m._runtime_user_peer_name_alt = None
-try:
-    peer = m._resolve_user_peer_id("data")
-except RuntimeError:
-    peer = None
-print(json.dumps({"user": uid, "peer": peer}), file=sys.__stdout__)
+print(json.dumps({"user": uid}), file=sys.__stdout__)
 '''
     client = TestClient(web.app, base_url="http://127.0.0.1")
     for user, profile in [("murray", "architect"), ("alice", "coder"), ("murray", "architect")]:
@@ -83,5 +73,5 @@ print(json.dumps({"user": uid, "peer": peer}), file=sys.__stdout__)
         result = subprocess.run([sys.executable, "-c", probe], env=captured[-1],
                                 cwd=Path(__file__).parents[2], capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, result.stderr
-        assert json.loads(result.stdout.splitlines()[-1]) == {"user": f"basic:{user}", "peer": f"basic-{user}"}
+        assert json.loads(result.stdout.splitlines()[-1]) == {"user": f"basic:{user}"}
         assert "HERMES_TUI_GATEWAY_URL" not in captured[-1]

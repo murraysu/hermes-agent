@@ -162,7 +162,9 @@ services:
   # Nginx — Reverse Proxy (optional)
   # ====================
   nginx:
-    image: nginx:alpine
+    # 2026-10-22 安全修補：1.31.5 受 CVE-2026-15176/93479/95101/97629/97205/90439 影響（1.31.7+ 修正）。
+    # 原本浮動 tag nginx:alpine；改為版本＋digest 釘死，升版要明確改這行。
+    image: nginx:1.31.8-alpine@sha256:e2d97c2b8c016f12c2f1a27d095685063b2f281c4edf2babfde6001cf4fb77a8
     container_name: hermes-nginx
     ports:
       - "80:80"

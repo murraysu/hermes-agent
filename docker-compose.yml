@@ -53,7 +53,8 @@ services:
   # ====================
   hermes-agent:
     build: .
-    image: hermes-agent-hermes-agent:sync-20261018-v0.22.2-r1
+    # 2026-10-23 r2：pm/lock.json 的 Chromium 145.0.7632.6 → CfT 156.0.8078.47（Google 10/20 穩定版安全更新）。回退改回 -r1。
+    image: hermes-agent-hermes-agent:sync-20261018-v0.22.2-r2-cft156
     container_name: hermes-agent-sm121
     ports:
       - "192.168.101.11:3001:9119"  # Web dashboard for trusted home LAN/WireGuard clients; auth is required

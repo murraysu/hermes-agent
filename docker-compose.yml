@@ -53,8 +53,8 @@ services:
   # ====================
   hermes-agent:
     build: .
-    # 2026-10-23 r2：pm/lock.json 的 Chromium 145.0.7632.6 → CfT 156.0.8078.47（Google 10/20 穩定版安全更新）。回退改回 -r1。
-    image: hermes-agent-hermes-agent:sync-20261024-v0.22.4-r2-cft156-ca1023-node26121
+    # 2026-10-24 r3：Pillow 12.3.0 → 13.0.0（cherry-pick 上游 27c6146381，修 28 個圖片解碼漏洞）。回退改回 -r2-cft156-ca1023-node26121。
+    image: hermes-agent-hermes-agent:sync-20261024-v0.22.4-r3-cft156-ca1023-node26121-pil13
     container_name: hermes-agent-sm121
     ports:
       - "192.168.101.11:3001:9119"  # Web dashboard for trusted home LAN/WireGuard clients; auth is required

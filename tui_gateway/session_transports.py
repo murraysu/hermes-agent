@@ -35,6 +35,29 @@ def _session_has_live_transport(session: dict | None, *, excluding=None) -> bool
     return any(peer is not excluding for peer in _session_live_transports(session))
 
 
+def _transport_auth_user_id(transport) -> str | None:
+    """``<provider>:<user id>`` the WS-upgrade credential authenticated for ``transport``, or None for the legacy
+    token, stdio and the PTY child's server-internal credential. The prefix keeps a basic-auth ``alice`` and an
+    OIDC ``alice`` apart. The dashboard's dedicated stdio PTY child carries the verified login it was spawned
+    for (``_stdio_auth_identity``, handed over once via env by chat_ws)."""
+    identity = getattr(transport, "auth_identity", None)
+    if _stdio_is_rpc_channel and (transport is None or transport is _stdio_transport):
+        identity = _stdio_auth_identity
+    if _methods_browser_control._is_authenticated_identity(identity):
+        return f"{str(identity['provider']).strip()}:{str(identity['user_id']).strip()}"
+    return None
+
+
+def _session_auth_user_id(session: dict | None) -> str | None:
+    """The login ``session`` was created under, stamped on the record as ``auth_user_id``. A second window turns
+    the transport slot into a FanoutTransport, which names no login, so only a record without the slot reads
+    its transport."""
+    session = session or {}
+    if "auth_user_id" in session:
+        return session["auth_user_id"]
+    return _transport_auth_user_id(session.get("transport"))
+
+
 def _session_client_answers_requests(sid: str) -> bool:
     """Whether a server→client request for *sid* can be answered: False only when every live WebSocket
     client attached to the session is a build that never sent ``client.capabilities`` (Desktop / dashboard

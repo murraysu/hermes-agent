@@ -372,6 +372,11 @@ RUN /opt/hermes/.venv/bin/python -m docker.build_agent
 # read-only for the hermes user (go-w from the --chmod above).
 
 USER root
+# eMudhra intermediate CA compromise (2026-10-20): the debian:13.4 base pin predates
+# DSA-6572-1, and ssl_verify trusts the OS store, so pull the fixed ca-certificates here.
+RUN apt-get -o Acquire::Retries=3 update && \
+    apt-get -o Acquire::Retries=3 install -y --no-install-recommends --only-upgrade ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /opt/hermes/bin && \
     cp /opt/hermes/docker/hermes-exec-shim.sh /opt/hermes/bin/hermes && \
     chmod 0755 /opt/hermes /opt/hermes/bin/hermes && \

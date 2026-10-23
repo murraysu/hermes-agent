@@ -140,6 +140,11 @@ services:
     pids_limit: 512
     mem_limit: 6g
     cpus: 2
+    networks:
+      - default
+      # analyzer profile's browser.cdp_url reaches webstack-chromium at 172.31.0.2:9222 here, so
+      # the CDP port is not published on the host (unauthenticated DevTools = full browser control).
+      - webstack
 
   # ====================
   # Redis — Cache for LiteLLM
@@ -196,3 +201,7 @@ networks:
     ipam:
       config:
         - subnet: 172.22.0.0/16
+  webstack:
+    # Owned by the crawl4ai webstack compose (hermes volume: profiles/analyzer/webstack/crawl4ai).
+    external: true
+    name: crawl4ai_webstack

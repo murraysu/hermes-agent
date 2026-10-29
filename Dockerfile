@@ -374,8 +374,10 @@ RUN /opt/hermes/.venv/bin/python -m docker.build_agent
 USER root
 # eMudhra intermediate CA compromise (2026-10-20): the debian:13.4 base pin predates
 # DSA-6572-1, and ssl_verify trusts the OS store, so pull the fixed ca-certificates here.
+# Brotli CVE-2026-111497 (2026-10-29): the same pin predates libbrotli1 1.1.0-2+deb13u1.
 RUN apt-get -o Acquire::Retries=3 update && \
-    apt-get -o Acquire::Retries=3 install -y --no-install-recommends --only-upgrade ca-certificates && \
+    apt-get -o Acquire::Retries=3 install -y --no-install-recommends --only-upgrade ca-certificates libbrotli1 && \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libbrotli1)" ge 1.1.0-2+deb13u1 && \
     rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /opt/hermes/bin && \
     cp /opt/hermes/docker/hermes-exec-shim.sh /opt/hermes/bin/hermes && \

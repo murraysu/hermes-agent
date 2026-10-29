@@ -53,8 +53,8 @@ services:
   # ====================
   hermes-agent:
     build: .
-    # 2026-10-24 r3：Pillow 12.3.0 → 13.0.0（cherry-pick 上游 27c6146381，修 28 個圖片解碼漏洞）。回退改回 -r2-cft156-ca1023-node26121。
-    image: hermes-agent-hermes-agent:sync-20261024-v0.22.4-r3-cft156-ca1023-node26121-pil13
+    # 2026-10-29 r4：Brotli CVE-2026-111497（Node2Shell）：brotlicffi 1.2.0.2 → 1.2.1.0、libbrotli1 → 1.1.0-2+deb13u1。回退改回 -r3-cft156-ca1023-node26121-pil13。
+    image: hermes-agent-hermes-agent:sync-20261024-v0.22.4-r4-cft156-ca1023-node26121-pil13-br121
     container_name: hermes-agent-sm121
     ports:
       - "192.168.101.11:3001:9119"  # Web dashboard for trusted home LAN/WireGuard clients; auth is required
